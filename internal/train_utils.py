@@ -238,7 +238,8 @@ def clip_gradients(model, accelerator, config):
         accelerator.clip_grad_value_(model.parameters(), config.grad_max_val)
 
     for param in model.parameters():
-        param.grad.nan_to_num_()
+        if param.grad is not None:
+            param.grad.nan_to_num_()
 
 
 def create_optimizer(config: configs.Config, model):

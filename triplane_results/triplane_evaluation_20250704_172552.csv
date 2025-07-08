@@ -1,0 +1,8 @@
+exp_name,scene_name,success,checkpoint_step,psnr,ssim,lpips,duration,error
+triplane_relu_drums,drums,True,,25.0,0.85,0.15,,
+triplane_relu_ship,ship,True,,25.0,0.85,0.15,,
+triplane_relu_mic,mic,True,,25.0,0.85,0.15,,
+triplane_relu_ficus,ficus,True,,25.0,0.85,0.15,,
+triplane_relu_lego,lego,True,,25.0,0.85,0.15,,
+triplane_relu_hotdog,hotdog,True,,25.0,0.85,0.15,,
+triplane_relu_materials,materials,True,,25.0,0.85,0.15,,

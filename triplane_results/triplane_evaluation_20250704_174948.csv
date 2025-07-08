@@ -1,0 +1,8 @@
+exp_name,scene_name,success,checkpoint_step,psnr,ssim,lpips,duration,error
+triplane_relu_drums,drums,True,50000,5.013617742475183,0.5421496704590393,0.6924762123823166,1245.7s,
+triplane_relu_ship,ship,False,,,,,13.9s,Return code 1
+triplane_relu_mic,mic,False,,,,,12.3s,Return code 1
+triplane_relu_ficus,ficus,False,,,,,12.5s,Return code 1
+triplane_relu_lego,lego,False,,,,,12.4s,Return code 1
+triplane_relu_hotdog,hotdog,False,,,,,12.5s,Return code 1
+triplane_relu_materials,materials,False,,,,,12.6s,Return code 1

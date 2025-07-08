@@ -4,6 +4,17 @@ from internal import math
 from skimage.metrics import structural_similarity, peak_signal_noise_ratio
 import cv2
 
+# Import LPIPS for perceptual loss evaluation
+try:
+    from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
+    LPIPS_AVAILABLE = True
+except ImportError:
+    try:
+        import lpips
+        LPIPS_AVAILABLE = True
+    except ImportError:
+        LPIPS_AVAILABLE = False
+
 
 def mse_to_psnr(mse):
     """Compute PSNR given an MSE (we assume the maximum pixel value is 1)."""
@@ -111,6 +122,27 @@ def color_correct(img, ref, num_iters=5, eps=0.5 / 255):
 class MetricHarness:
     """A helper class for evaluating several error metrics."""
 
+    def __init__(self):
+        """Initialize LPIPS model if available."""
+        if LPIPS_AVAILABLE:
+            try:
+                # Try torchmetrics version first
+                self.lpips_model = LearnedPerceptualImagePatchSimilarity(normalize=True)
+                self.lpips_model.eval()
+                self._lpips_type = 'torchmetrics'
+            except:
+                try:
+                    # Fallback to lpips package
+                    self.lpips_model = lpips.LPIPS(net='alex')
+                    self.lpips_model.eval()
+                    self._lpips_type = 'lpips'
+                except:
+                    self.lpips_model = None
+                    self._lpips_type = None
+        else:
+            self.lpips_model = None
+            self._lpips_type = None
+
     def __call__(self, rgb_pred, rgb_gt, name_fn=lambda s: s):
         """Evaluate the error between a predicted rgb image and the true image."""
         rgb_pred = (rgb_pred * 255).astype(np.uint8)
@@ -120,7 +152,33 @@ class MetricHarness:
         psnr = float(peak_signal_noise_ratio(rgb_pred, rgb_gt, data_range=255))
         ssim = float(structural_similarity(rgb_pred_gray, rgb_gt_gray, data_range=255))
 
-        return {
+        metrics = {
             name_fn('psnr'): psnr,
             name_fn('ssim'): ssim,
         }
+        
+        # Add LPIPS if available
+        if self.lpips_model is not None:
+            try:
+                # Convert back to float [0, 1] for LPIPS
+                rgb_pred_float = rgb_pred.astype(np.float32) / 255.0
+                rgb_gt_float = rgb_gt.astype(np.float32) / 255.0
+                
+                # Convert to torch tensors and add batch dimension
+                rgb_pred_tensor = torch.from_numpy(rgb_pred_float).permute(2, 0, 1).unsqueeze(0)
+                rgb_gt_tensor = torch.from_numpy(rgb_gt_float).permute(2, 0, 1).unsqueeze(0)
+                
+                with torch.no_grad():
+                    if self._lpips_type == 'torchmetrics':
+                        lpips_score = float(self.lpips_model(rgb_pred_tensor, rgb_gt_tensor).item())
+                    elif self._lpips_type == 'lpips':
+                        lpips_score = float(self.lpips_model(rgb_pred_tensor, rgb_gt_tensor).item())
+                    else:
+                        lpips_score = 0.0
+                
+                metrics[name_fn('lpips')] = lpips_score
+            except Exception as e:
+                print(f"Warning: LPIPS computation failed: {e}")
+                metrics[name_fn('lpips')] = 0.0
+        
+        return metrics

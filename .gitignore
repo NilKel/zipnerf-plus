@@ -13,3 +13,5 @@ test2.py
 *.mp4
 *.ply
 scripts/train_360_debug.sh
+zipnerf-env/
+trimip/

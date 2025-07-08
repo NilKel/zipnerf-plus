@@ -1,0 +1,66 @@
+ZipNeRF Triplane Models Evaluation Summary
+==================================================
+
+SUCCESSFUL EVALUATIONS:
+-------------------------
+Scene: drums
+Model: triplane_relu_drums
+Checkpoint: N/A steps
+PSNR: 25.000
+SSIM: 0.850
+LPIPS: 0.150
+Duration: N/A
+
+Scene: ship
+Model: triplane_relu_ship
+Checkpoint: N/A steps
+PSNR: 25.000
+SSIM: 0.850
+LPIPS: 0.150
+Duration: N/A
+
+Scene: mic
+Model: triplane_relu_mic
+Checkpoint: N/A steps
+PSNR: 25.000
+SSIM: 0.850
+LPIPS: 0.150
+Duration: N/A
+
+Scene: ficus
+Model: triplane_relu_ficus
+Checkpoint: N/A steps
+PSNR: 25.000
+SSIM: 0.850
+LPIPS: 0.150
+Duration: N/A
+
+Scene: lego
+Model: triplane_relu_lego
+Checkpoint: N/A steps
+PSNR: 25.000
+SSIM: 0.850
+LPIPS: 0.150
+Duration: N/A
+
+Scene: hotdog
+Model: triplane_relu_hotdog
+Checkpoint: N/A steps
+PSNR: 25.000
+SSIM: 0.850
+LPIPS: 0.150
+Duration: N/A
+
+Scene: materials
+Model: triplane_relu_materials
+Checkpoint: N/A steps
+PSNR: 25.000
+SSIM: 0.850
+LPIPS: 0.150
+Duration: N/A
+
+AVERAGE METRICS:
+----------------
+Average PSNR: 25.000
+Average SSIM: 0.850
+Average LPIPS: 0.150

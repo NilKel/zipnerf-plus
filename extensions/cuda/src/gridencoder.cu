@@ -1,6 +1,7 @@
 #include <cuda.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
+#include <sm_60_atomic_functions.h>
 
 #include <ATen/cuda/CUDAContext.h>
 #include <torch/torch.h>
@@ -464,10 +465,13 @@ void grid_encode_forward(const at::Tensor inputs, const at::Tensor embeddings, c
     CHECK_IS_FLOATING(outputs);
     // CHECK_IS_FLOATING(dy_dx);
 
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(
-    embeddings.scalar_type(), "grid_encode_forward", ([&] {
-        grid_encode_forward_cuda<scalar_t>(inputs.data_ptr<float>(), embeddings.data_ptr<scalar_t>(), offsets.data_ptr<int>(), outputs.data_ptr<scalar_t>(), B, D, C, L, S, H, dy_dx.has_value() ? dy_dx.value().data_ptr<scalar_t>() : nullptr, gridtype, align_corners, interp);
-    }));
+    if (embeddings.scalar_type() == at::kFloat) {
+        grid_encode_forward_cuda<float>(inputs.data_ptr<float>(), embeddings.data_ptr<float>(), offsets.data_ptr<int>(), outputs.data_ptr<float>(), B, D, C, L, S, H, dy_dx.has_value() ? dy_dx.value().data_ptr<float>() : nullptr, gridtype, align_corners, interp);
+    } else if (embeddings.scalar_type() == at::kHalf) {
+        grid_encode_forward_cuda<at::Half>(inputs.data_ptr<float>(), embeddings.data_ptr<at::Half>(), offsets.data_ptr<int>(), outputs.data_ptr<at::Half>(), B, D, C, L, S, H, dy_dx.has_value() ? dy_dx.value().data_ptr<at::Half>() : nullptr, gridtype, align_corners, interp);
+    } else {
+        throw std::runtime_error("GridEncoding only supports float and half precision.");
+    }
 }
 
 void grid_encode_backward(const at::Tensor grad, const at::Tensor inputs, const at::Tensor embeddings, const at::Tensor offsets, at::Tensor grad_embeddings, const uint32_t B, const uint32_t D, const uint32_t C, const uint32_t L, const float S, const uint32_t H, const at::optional<at::Tensor> dy_dx, at::optional<at::Tensor> grad_inputs, const uint32_t gridtype, const bool align_corners, const uint32_t interp) {
@@ -495,10 +499,13 @@ void grid_encode_backward(const at::Tensor grad, const at::Tensor inputs, const 
     // CHECK_IS_FLOATING(dy_dx);
     // CHECK_IS_FLOATING(grad_inputs);
 
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(
-    grad.scalar_type(), "grid_encode_backward", ([&] {
-        grid_encode_backward_cuda<scalar_t>(grad.data_ptr<scalar_t>(), inputs.data_ptr<float>(), embeddings.data_ptr<scalar_t>(), offsets.data_ptr<int>(), grad_embeddings.data_ptr<scalar_t>(), B, D, C, L, S, H, dy_dx.has_value() ? dy_dx.value().data_ptr<scalar_t>() : nullptr, grad_inputs.has_value() ? grad_inputs.value().data_ptr<scalar_t>() : nullptr, gridtype, align_corners, interp);
-    }));
+    if (grad.scalar_type() == at::kFloat) {
+        grid_encode_backward_cuda<float>(grad.data_ptr<float>(), inputs.data_ptr<float>(), embeddings.data_ptr<float>(), offsets.data_ptr<int>(), grad_embeddings.data_ptr<float>(), B, D, C, L, S, H, dy_dx.has_value() ? dy_dx.value().data_ptr<float>() : nullptr, grad_inputs.has_value() ? grad_inputs.value().data_ptr<float>() : nullptr, gridtype, align_corners, interp);
+    } else if (grad.scalar_type() == at::kHalf) {
+        grid_encode_backward_cuda<at::Half>(grad.data_ptr<at::Half>(), inputs.data_ptr<float>(), embeddings.data_ptr<at::Half>(), offsets.data_ptr<int>(), grad_embeddings.data_ptr<at::Half>(), B, D, C, L, S, H, dy_dx.has_value() ? dy_dx.value().data_ptr<at::Half>() : nullptr, grad_inputs.has_value() ? grad_inputs.value().data_ptr<at::Half>() : nullptr, gridtype, align_corners, interp);
+    } else {
+        throw std::runtime_error("GridEncoding only supports float and half precision.");
+    }
     
 }
 
@@ -638,8 +645,11 @@ void grad_total_variation_cuda(const scalar_t *inputs, const scalar_t *embedding
 
 void grad_total_variation(const at::Tensor inputs, const at::Tensor embeddings, at::Tensor grad, const at::Tensor offsets, const float weight, const uint32_t B, const uint32_t D, const uint32_t C, const uint32_t L, const float S, const uint32_t H, const uint32_t gridtype, const bool align_corners) {
 
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(
-    embeddings.scalar_type(), "grad_total_variation", ([&] {
-        grad_total_variation_cuda<scalar_t>(inputs.data_ptr<scalar_t>(), embeddings.data_ptr<scalar_t>(), grad.data_ptr<scalar_t>(), offsets.data_ptr<int>(), weight, B, D, C, L, S, H, gridtype, align_corners);
-    }));
+    if (embeddings.scalar_type() == at::kFloat) {
+        grad_total_variation_cuda<float>(inputs.data_ptr<float>(), embeddings.data_ptr<float>(), grad.data_ptr<float>(), offsets.data_ptr<int>(), weight, B, D, C, L, S, H, gridtype, align_corners);
+    } else if (embeddings.scalar_type() == at::kHalf) {
+        grad_total_variation_cuda<at::Half>(inputs.data_ptr<at::Half>(), embeddings.data_ptr<at::Half>(), grad.data_ptr<at::Half>(), offsets.data_ptr<int>(), weight, B, D, C, L, S, H, gridtype, align_corners);
+    } else {
+        throw std::runtime_error("GridEncoding only supports float and half precision.");
+    }
 }

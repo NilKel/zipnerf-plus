@@ -16,6 +16,7 @@ import torch.nn.functional as F
 from torch.utils._pytree import tree_map
 from tqdm import tqdm
 from gridencoder import GridEncoder
+from internal.tri_mip import TriMipEncoding
 try:
     from torch_scatter import segment_coo
 except:
@@ -68,7 +69,8 @@ class Model(nn.Module):
 
         # Construct MLPs. WARNING: Construction order may matter, if MLP weights are
         # being regularized.
-        self.nerf_mlp = NerfMLP(num_glo_features=self.num_glo_features,
+        self.nerf_mlp = NerfMLP(config=config,
+                                num_glo_features=self.num_glo_features,
                                 num_glo_embeddings=self.num_glo_embeddings)
         if self.config.dpcpp_backend:
             self.generator = self.nerf_mlp.encoder.backend.get_generator()
@@ -78,10 +80,10 @@ class Model(nn.Module):
         if self.single_mlp:
             self.prop_mlp = self.nerf_mlp
         elif not self.distinct_prop:
-            self.prop_mlp = PropMLP()
+            self.prop_mlp = PropMLP(config=config)
         else:
             for i in range(self.num_levels - 1):
-                self.register_module(f'prop_mlp_{i}', PropMLP(grid_disired_resolution=self.prop_desired_grid_size[i]))
+                self.register_module(f'prop_mlp_{i}', PropMLP(config=config, grid_disired_resolution=self.prop_desired_grid_size[i]))
         if self.num_glo_features > 0 and not config.zero_glo:
             # Construct/grab GLO vectors for the cameras of each input ray.
             self.glo_vecs = nn.Embedding(self.num_glo_embeddings, self.num_glo_features)
@@ -92,6 +94,13 @@ class Model(nn.Module):
             # Initialize the learned scaling offsets at 0.
             self.exposure_scaling_offsets = nn.Embedding(max_num_exposures, 3)
             torch.nn.init.zeros_(self.exposure_scaling_offsets.weight)
+
+        # Add triplane components - always create them to ensure parameters are registered
+        self.tri_mip_encoding = TriMipEncoding(n_levels=8, plane_size=512, feature_dim=16)
+        self.tri_mip_projection = nn.Sequential(
+            nn.Linear(self.tri_mip_encoding.dim_out, self.nerf_mlp.encoder.output_dim),
+            nn.ReLU()
+        )
 
     def forward(
             self,
@@ -370,9 +379,12 @@ class MLP(nn.Module):
     net_width_glo: int = 128  # The width of the second part of MLP.
     net_depth_glo: int = 2  # The width of the second part of MLP.
 
-    def __init__(self, **kwargs):
+    def __init__(self, config=None, **kwargs):
         super().__init__()
         set_kwargs(self, kwargs)
+        # Store config for later use
+        self.config = config
+        
         # Make sure that normals are computed if reflection direction is used.
         if self.use_reflections and not (self.enable_pred_normals or
                                          not self.disable_density_normals):
@@ -400,6 +412,14 @@ class MLP(nn.Module):
                                    log2_hashmap_size=self.grid_log2_hashmap_size,
                                    gridtype='hash',
                                    align_corners=False)
+        
+        # Add triplane components - always create them to ensure parameters are registered
+        self.tri_mip_encoding = TriMipEncoding(n_levels=8, plane_size=512, feature_dim=16)
+        self.tri_mip_projection = nn.Sequential(
+            nn.Linear(self.tri_mip_encoding.dim_out, self.encoder.output_dim),
+            nn.ReLU()
+        )
+        
         last_dim = self.encoder.output_dim
         if self.scale_featurization:
             last_dim += self.encoder.num_levels
@@ -459,9 +479,44 @@ class MLP(nn.Module):
             bound = 2
             means = means / bound
             stds = stds / bound
-        features = self.encoder(means, bound=1).unflatten(-1, (self.encoder.num_levels, -1))
-        weights = torch.erf(1 / torch.sqrt(8 * stds[..., None] ** 2 * self.encoder.grid_sizes ** 2))
-        features = (features * weights[..., None]).mean(dim=-3).flatten(-2, -1)
+        
+        # Check if triplane is enabled using stored config
+        use_triplane = self.config is not None and getattr(self.config, 'use_triplane', False)
+        
+        if use_triplane:
+            # Triplane + Hashgrid blending - match original ZipNeRF processing exactly
+            hash_features_raw = self.encoder(means, bound=1)
+            hash_features_per_level = hash_features_raw.unflatten(-1, (self.encoder.num_levels, -1))
+
+            # Normalize coordinates for triplane - clamp to ensure valid range
+            normalized_means = torch.clamp((means + 1.0) / 2.0, 0.0, 1.0)  # Convert from [-1,1] to [0,1]
+            
+            # Calculate mip level from stds with better numerical stability
+            stds_mean = stds.mean(dim=-1, keepdim=True)
+            # Use more stable mip level calculation
+            trimip_level = torch.log2(stds_mean.clamp(min=1e-8, max=1e2)) + 1.0
+            trimip_level = torch.clamp(trimip_level, 0, self.tri_mip_encoding.n_levels - 1)
+            
+            # Get triplane features
+            tri_mip_features = self.tri_mip_encoding(normalized_means, trimip_level.unsqueeze(-1))
+            projected_trimip_features = self.tri_mip_projection(tri_mip_features)
+            trimip_features_per_level = projected_trimip_features.unflatten(-1, (self.encoder.num_levels, -1))
+
+            # Calculate weights with numerical stability - same as original
+            weights = torch.erf(1 / torch.sqrt(8 * stds[..., None] ** 2 * self.encoder.grid_sizes ** 2 + 1e-8))
+
+            # Blend the unweighted features: zipnerf weight for hashgrid, (1-zipnerf_weight) for triplane
+            # This creates a weighted combination of hash and triplane features at each level
+            blended_features_per_level = (weights[..., None] * hash_features_per_level) + ((1 - weights[..., None]) * trimip_features_per_level)
+            
+            # Apply the same ZipNeRF processing as original: multiply by weights, mean across levels, flatten
+            features = (blended_features_per_level * weights[..., None]).mean(dim=-3).flatten(-2, -1)
+        else:
+            # Original hashgrid-only path
+            features = self.encoder(means, bound=1).unflatten(-1, (self.encoder.num_levels, -1))
+            weights = torch.erf(1 / torch.sqrt(8 * stds[..., None] ** 2 * self.encoder.grid_sizes ** 2 + 1e-8))
+            features = (features * weights[..., None]).mean(dim=-3).flatten(-2, -1)
+        
         if self.scale_featurization:
             with torch.no_grad():
                 vl2mean = segment_coo((self.encoder.embeddings ** 2).sum(-1),

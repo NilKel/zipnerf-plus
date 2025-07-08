@@ -1,0 +1,79 @@
+[
+  {
+    "exp_name": "triplane_relu_drums",
+    "scene_name": "drums",
+    "success": true,
+    "message": "Dry run completed",
+    "metrics": {
+      "psnr": 25.0,
+      "ssim": 0.85,
+      "lpips": 0.15
+    }
+  },
+  {
+    "exp_name": "triplane_relu_ship",
+    "scene_name": "ship",
+    "success": true,
+    "message": "Dry run completed",
+    "metrics": {
+      "psnr": 25.0,
+      "ssim": 0.85,
+      "lpips": 0.15
+    }
+  },
+  {
+    "exp_name": "triplane_relu_mic",
+    "scene_name": "mic",
+    "success": true,
+    "message": "Dry run completed",
+    "metrics": {
+      "psnr": 25.0,
+      "ssim": 0.85,
+      "lpips": 0.15
+    }
+  },
+  {
+    "exp_name": "triplane_relu_ficus",
+    "scene_name": "ficus",
+    "success": true,
+    "message": "Dry run completed",
+    "metrics": {
+      "psnr": 25.0,
+      "ssim": 0.85,
+      "lpips": 0.15
+    }
+  },
+  {
+    "exp_name": "triplane_relu_lego",
+    "scene_name": "lego",
+    "success": true,
+    "message": "Dry run completed",
+    "metrics": {
+      "psnr": 25.0,
+      "ssim": 0.85,
+      "lpips": 0.15
+    }
+  },
+  {
+    "exp_name": "triplane_relu_hotdog",
+    "scene_name": "hotdog",
+    "success": true,
+    "message": "Dry run completed",
+    "metrics": {
+      "psnr": 25.0,
+      "ssim": 0.85,
+      "lpips": 0.15
+    }
+  },
+  {
+    "exp_name": "triplane_relu_materials",
+    "scene_name": "materials",
+    "success": true,
+    "message": "Dry run completed",
+    "metrics": {
+      "psnr": 25.0,
+      "ssim": 0.85,
+      "lpips": 0.15
+    }
+  }
+]

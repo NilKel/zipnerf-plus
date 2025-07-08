@@ -22,6 +22,7 @@ from internal import checkpoints
 import torch
 import accelerate
 import tensorboardX
+import wandb
 from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 from torch.utils._pytree import tree_map
@@ -117,17 +118,74 @@ def main(unused_argv):
     # metric handler
     metric_harness = image.MetricHarness()
 
-    # tensorboard
+    # Initialize logging systems
     if accelerator.is_main_process:
-        summary_writer = tensorboardX.SummaryWriter(config.exp_path)
-        # function to convert image for tensorboard
-        tb_process_fn = lambda x: x.transpose(2, 0, 1) if len(x.shape) == 3 else x[None]
+        # Initialize Weights & Biases
+        if config.use_wandb:
+            wandb_config = {
+                'batch_size': config.batch_size,
+                'max_steps': config.max_steps,
+                'lr_init': config.lr_init,
+                'lr_final': config.lr_final,
+                'lr_delay_steps': config.lr_delay_steps,
+                'data_loss_mult': config.data_loss_mult,
+                'interlevel_loss_mult': config.interlevel_loss_mult,
+                'anti_interlevel_loss_mult': config.anti_interlevel_loss_mult,
+                'distortion_loss_mult': config.distortion_loss_mult,
+                'hash_decay_mults': config.hash_decay_mults,
+                'dataset_loader': config.dataset_loader,
+                'exp_name': config.exp_name,
+                'data_dir': config.data_dir,
+                'factor': config.factor,
+                'num_params': num_params,
+                'seed': config.seed,
+                'near': config.near,
+                'far': config.far,
+                'model_type': 'zipnerf',
+                'device': str(accelerator.device),
+                'world_size': config.world_size,
+            }
+            
+            # Add model architecture details
+            wandb_config.update({
+                'num_prop_samples': module.num_prop_samples,
+                'num_nerf_samples': module.num_nerf_samples,
+                'num_levels': module.num_levels,
+                'use_viewdirs': module.use_viewdirs,
+                'single_mlp': module.single_mlp,
+                'num_glo_features': module.num_glo_features,
+            })
+            
+            # Initialize wandb run
+            wandb.init(
+                project=config.wandb_project,
+                entity=config.wandb_entity,
+                name=config.wandb_name or config.exp_name,
+                tags=config.wandb_tags,
+                notes=config.wandb_notes,
+                config=wandb_config,
+                dir=config.exp_path,
+                save_code=True,
+            )
+            
+            # Log system info
+            wandb.log({
+                'system/gpu_name': torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU',
+                'system/gpu_memory_gb': torch.cuda.get_device_properties(0).total_memory / 1e9 if torch.cuda.is_available() else 0,
+            }, step=0)
+        
+        # Initialize tensorboard (if not disabled)
+        summary_writer = None
+        if not config.disable_tensorboard:
+            summary_writer = tensorboardX.SummaryWriter(config.exp_path)
+            # function to convert image for tensorboard
+            tb_process_fn = lambda x: x.transpose(2, 0, 1) if len(x.shape) == 3 else x[None]
 
-        if config.rawnerf_mode:
-            for name, data in zip(['train', 'test'], [dataset, test_dataset]):
-                # Log shutter speed metadata in TensorBoard for debug purposes.
-                for key in ['exposure_idx', 'exposure_values', 'unique_shutters']:
-                    summary_writer.add_text(f'{name}_{key}', str(data.metadata[key]), 0)
+            if config.rawnerf_mode:
+                for name, data in zip(['train', 'test'], [dataset, test_dataset]):
+                    # Log shutter speed metadata in TensorBoard for debug purposes.
+                    for key in ['exposure_idx', 'exposure_values', 'unique_shutters']:
+                        summary_writer.add_text(f'{name}_{key}', str(data.metadata[key]), 0)
     logger.info("Begin training...")
     step = init_step + 1
     total_time = 0
@@ -253,38 +311,95 @@ def main(unused_argv):
                                 stats_split[f'{k}/{i}'] = vi
 
                     # Summarize the entire histogram of each statistic.
-                    for k, v in stats_split.items():
-                        summary_writer.add_histogram('train_' + k, v, step)
+                    if summary_writer is not None:
+                        for k, v in stats_split.items():
+                            summary_writer.add_histogram('train_' + k, v, step)
 
                     # Take the mean and max of each statistic since the last summary.
                     avg_stats = {k: np.mean(v) for k, v in stats_split.items()}
                     max_stats = {k: np.max(v) for k, v in stats_split.items()}
 
-                    summ_fn = lambda s, v: summary_writer.add_scalar(s, v, step)  # pylint:disable=cell-var-from-loop
+                    # Tensorboard logging
+                    if summary_writer is not None:
+                        summ_fn = lambda s, v: summary_writer.add_scalar(s, v, step)  # pylint:disable=cell-var-from-loop
 
-                    # Summarize the mean and max of each statistic.
-                    for k, v in avg_stats.items():
-                        summ_fn(f'train_avg_{k}', v)
-                    for k, v in max_stats.items():
-                        summ_fn(f'train_max_{k}', v)
+                        # Summarize the mean and max of each statistic.
+                        for k, v in avg_stats.items():
+                            summ_fn(f'train_avg_{k}', v)
+                        for k, v in max_stats.items():
+                            summ_fn(f'train_max_{k}', v)
 
-                    summ_fn('train_num_params', num_params)
-                    summ_fn('train_learning_rate', learning_rate)
-                    summ_fn('train_steps_per_sec', steps_per_sec)
-                    summ_fn('train_rays_per_sec', rays_per_sec)
+                        summ_fn('train_num_params', num_params)
+                        summ_fn('train_learning_rate', learning_rate)
+                        summ_fn('train_steps_per_sec', steps_per_sec)
+                        summ_fn('train_rays_per_sec', rays_per_sec)
 
-                    summary_writer.add_scalar('train_avg_psnr_timed', avg_stats['psnr'],
-                                              total_time // TIME_PRECISION)
-                    summary_writer.add_scalar('train_avg_psnr_timed_approx', avg_stats['psnr'],
-                                              approx_total_time // TIME_PRECISION)
+                        summary_writer.add_scalar('train_avg_psnr_timed', avg_stats['psnr'],
+                                                  total_time // TIME_PRECISION)
+                        summary_writer.add_scalar('train_avg_psnr_timed_approx', avg_stats['psnr'],
+                                                  approx_total_time // TIME_PRECISION)
 
-                    if dataset.metadata is not None and module.learned_exposure_scaling:
-                        scalings = module.exposure_scaling_offsets.weight
-                        num_shutter_speeds = dataset.metadata['unique_shutters'].shape[0]
-                        for i_s in range(num_shutter_speeds):
-                            for j_s, value in enumerate(scalings[i_s]):
-                                summary_name = f'exposure/scaling_{i_s}_{j_s}'
-                                summary_writer.add_scalar(summary_name, value, step)
+                        if dataset.metadata is not None and module.learned_exposure_scaling:
+                            scalings = module.exposure_scaling_offsets.weight
+                            num_shutter_speeds = dataset.metadata['unique_shutters'].shape[0]
+                            for i_s in range(num_shutter_speeds):
+                                for j_s, value in enumerate(scalings[i_s]):
+                                    summary_name = f'exposure/scaling_{i_s}_{j_s}'
+                                    summary_writer.add_scalar(summary_name, value, step)
+                    
+                    # Weights & Biases logging
+                    if config.use_wandb:
+                        # Prepare wandb logging dictionary
+                        wandb_log = {
+                            'step': step,
+                            'training/learning_rate': learning_rate,
+                            'training/steps_per_sec': steps_per_sec,
+                            'training/rays_per_sec': rays_per_sec,
+                            'training/elapsed_time': elapsed_time,
+                            'training/train_frac': train_frac,
+                        }
+                        
+                        # Log all average statistics
+                        for k, v in avg_stats.items():
+                            if k.startswith('losses/'):
+                                wandb_log[f'loss/{k[7:]}'] = v
+                            elif k == 'loss':
+                                wandb_log['loss/total'] = v
+                            elif k == 'psnr':
+                                wandb_log['metrics/psnr'] = v
+                            elif k.startswith('mses/'):
+                                wandb_log[f'metrics/{k}'] = v
+                            elif k.startswith('psnrs/'):
+                                wandb_log[f'metrics/{k}'] = v
+                            else:
+                                wandb_log[f'training/{k}'] = v
+                        
+                        # Log max statistics (for monitoring outliers)
+                        for k, v in max_stats.items():
+                            if k == 'loss':
+                                wandb_log['loss/total_max'] = v
+                            elif k == 'psnr':
+                                wandb_log['metrics/psnr_max'] = v
+                        
+                        # Log model parameters count
+                        wandb_log['model/num_params'] = num_params
+                        
+                        # Log timing metrics
+                        wandb_log['timing/psnr_vs_time'] = {
+                            'psnr': avg_stats['psnr'],
+                            'time_seconds': total_time / TIME_PRECISION
+                        }
+                        
+                        # Log exposure scaling if available
+                        if dataset.metadata is not None and module.learned_exposure_scaling:
+                            scalings = module.exposure_scaling_offsets.weight
+                            num_shutter_speeds = dataset.metadata['unique_shutters'].shape[0]
+                            for i_s in range(num_shutter_speeds):
+                                for j_s, value in enumerate(scalings[i_s]):
+                                    wandb_log[f'exposure/scaling_{i_s}_{j_s}'] = value.item()
+                        
+                        # Log the dictionary to wandb
+                        wandb.log(wandb_log, step=step)
 
                     precision = int(np.ceil(np.log10(config.max_steps))) + 1
                     avg_loss = avg_stats['loss']
@@ -334,17 +449,29 @@ def main(unused_argv):
                     eval_time = time.time() - eval_start_time
                     num_rays = np.prod(test_batch['directions'].shape[:-1])
                     rays_per_sec = num_rays / eval_time
-                    summary_writer.add_scalar('test_rays_per_sec', rays_per_sec, step)
+                    if summary_writer is not None:
+                        summary_writer.add_scalar('test_rays_per_sec', rays_per_sec, step)
 
                     metric_start_time = time.time()
                     metric = metric_harness(
                         postprocess_fn(rendering['rgb']), postprocess_fn(test_batch['rgb']))
                     logger.info(f'Eval {step}: {eval_time:0.3f}s, {rays_per_sec:0.0f} rays/sec')
                     logger.info(f'Metrics computed in {(time.time() - metric_start_time):0.3f}s')
+                    
+                    # Prepare eval metrics for logging
+                    eval_wandb_log = {
+                        'eval/rays_per_sec': rays_per_sec,
+                        'eval/eval_time': eval_time,
+                        'eval/metric_compute_time': time.time() - metric_start_time,
+                    }
+                    
                     for name, val in metric.items():
                         if not np.isnan(val):
                             logger.info(f'{name} = {val:.4f}')
-                            summary_writer.add_scalar('train_metrics/' + name, val, step)
+                            if summary_writer is not None:
+                                summary_writer.add_scalar('train_metrics/' + name, val, step)
+                            if config.use_wandb:
+                                eval_wandb_log[f'eval_metrics/{name}'] = val
 
                     if config.vis_decimate > 1:
                         d = config.vis_decimate
@@ -357,31 +484,96 @@ def main(unused_argv):
                     vis_suite = vis.visualize_suite(rendering, test_batch)
                     with tqdm.external_write_mode():
                         logger.info(f'Visualized in {(time.time() - vis_start_time):0.3f}s')
-                    if config.rawnerf_mode:
-                        # Unprocess raw output.
-                        vis_suite['color_raw'] = rendering['rgb']
-                        # Autoexposed colors.
-                        vis_suite['color_auto'] = postprocess_fn(rendering['rgb'], None)
-                        summary_writer.add_image('test_true_auto',
-                                                 tb_process_fn(postprocess_fn(test_batch['rgb'], None)), step)
-                        # Exposure sweep colors.
-                        exposures = test_dataset.metadata['exposure_levels']
-                        for p, x in list(exposures.items()):
-                            vis_suite[f'color/{p}'] = postprocess_fn(rendering['rgb'], x)
-                            summary_writer.add_image(f'test_true_color/{p}',
-                                                     tb_process_fn(postprocess_fn(test_batch['rgb'], x)), step)
-                    summary_writer.add_image('test_true_color', tb_process_fn(test_batch['rgb']), step)
-                    if config.compute_normal_metrics:
-                        summary_writer.add_image('test_true_normals',
-                                                 tb_process_fn(test_batch['normals']) / 2. + 0.5, step)
-                    for k, v in vis_suite.items():
-                        summary_writer.add_image('test_output_' + k, tb_process_fn(v), step)
+                    
+                    # Log images to wandb
+                    if config.use_wandb:
+                        eval_wandb_log['eval/visualization_time'] = time.time() - vis_start_time
+                        
+                        # Convert images for wandb (wandb expects HWC format)
+                        wandb_images = {}
+                        
+                        # Ground truth image
+                        if not config.render_path:
+                            target = postprocess_fn(test_batch['rgb'])
+                            wandb_images['ground_truth'] = wandb.Image(
+                                target, caption=f"Ground Truth - Step {step}"
+                            )
+                        
+                        # Rendered outputs
+                        for k, v in vis_suite.items():
+                            if k == 'color':
+                                v_processed = postprocess_fn(v)
+                            else:
+                                v_processed = v
+                            
+                            # Ensure valid image format for wandb
+                            if len(v_processed.shape) == 3 and v_processed.shape[-1] in [1, 3, 4]:
+                                wandb_images[f'render_{k}'] = wandb.Image(
+                                    v_processed, caption=f"{k} - Step {step}"
+                                )
+                        
+                        # Add residual image if we have ground truth
+                        if not config.render_path and 'color' in vis_suite:
+                            pred = postprocess_fn(vis_suite['color'])
+                            target = postprocess_fn(test_batch['rgb'])
+                            residual = np.clip(pred - target + 0.5, 0, 1)
+                            wandb_images['residual'] = wandb.Image(
+                                residual, caption=f"Residual - Step {step}"
+                            )
+                        
+                        # Log normals if available
+                        if config.compute_normal_metrics:
+                            if summary_writer is not None:
+                                summary_writer.add_image('test_true_normals',
+                                                         tb_process_fn(test_batch['normals']) / 2. + 0.5, step)
+                            wandb_images['normals_gt'] = wandb.Image(
+                                test_batch['normals'] / 2. + 0.5, caption=f"Ground Truth Normals - Step {step}"
+                            )
+                        
+                        eval_wandb_log['eval_images'] = wandb_images
+                        
+                        # Log to wandb
+                        wandb.log(eval_wandb_log, step=step)
+                    
+                    # Tensorboard image logging
+                    if summary_writer is not None:
+                        if config.rawnerf_mode:
+                            # Unprocess raw output.
+                            vis_suite['color_raw'] = rendering['rgb']
+                            # Autoexposed colors.
+                            vis_suite['color_auto'] = postprocess_fn(rendering['rgb'], None)
+                            summary_writer.add_image('test_true_auto',
+                                                     tb_process_fn(postprocess_fn(test_batch['rgb'], None)), step)
+                            # Exposure sweep colors.
+                            exposures = test_dataset.metadata['exposure_levels']
+                            for p, x in list(exposures.items()):
+                                vis_suite[f'color/{p}'] = postprocess_fn(rendering['rgb'], x)
+                                summary_writer.add_image(f'test_true_color/{p}',
+                                                         tb_process_fn(postprocess_fn(test_batch['rgb'], x)), step)
+                        summary_writer.add_image('test_true_color', tb_process_fn(test_batch['rgb']), step)
+                        if config.compute_normal_metrics:
+                            summary_writer.add_image('test_true_normals',
+                                                     tb_process_fn(test_batch['normals']) / 2. + 0.5, step)
+                        for k, v in vis_suite.items():
+                            summary_writer.add_image('test_output_' + k, tb_process_fn(v), step)
 
     if accelerator.is_main_process and config.max_steps > init_step:
         logger.info('Saving last checkpoint at step {} to {}'.format(step, config.checkpoint_dir))
         checkpoints.save_checkpoint(config.checkpoint_dir,
                                     accelerator, step,
                                     config.checkpoints_total_limit)
+    
+    # Clean up wandb
+    if accelerator.is_main_process and config.use_wandb:
+        # Log final metrics
+        final_metrics = {
+            'training/final_step': step,
+            'training/total_time_hours': total_time / (TIME_PRECISION * 3600),
+            'training/completed': True,
+        }
+        wandb.log(final_metrics, step=step)
+        wandb.finish()
+    
     logger.info('Finish training.')
 
 

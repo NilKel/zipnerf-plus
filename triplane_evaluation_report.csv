@@ -1,0 +1,2 @@
+scene_name,exp_name,status,psnr,ssim,lpips,duration
+lego,lego_triplane_relu_lego_0703_2246_0703_2246,Failed,N/A,N/A,N/A,141.6s

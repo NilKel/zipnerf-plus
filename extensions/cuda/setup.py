@@ -4,13 +4,23 @@ from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
 _src_path = os.path.dirname(os.path.abspath(__file__))
 
+# Add compute capabilities for modern GPUs including RTX 5090 (sm_120)
 nvcc_flags = [
-    '-O3', '-std=c++14',
+    '-O3', '-std=c++17',
     '-U__CUDA_NO_HALF_OPERATORS__', '-U__CUDA_NO_HALF_CONVERSIONS__', '-U__CUDA_NO_HALF2_OPERATORS__',
+    # Explicitly include compute capabilities for modern GPUs
+    '--generate-code=arch=compute_70,code=sm_70',   # V100, RTX 20 series
+    '--generate-code=arch=compute_75,code=sm_75',   # RTX 20 series
+    '--generate-code=arch=compute_80,code=sm_80',   # A100, RTX 30 series
+    '--generate-code=arch=compute_86,code=sm_86',   # RTX 30 series
+    '--generate-code=arch=compute_89,code=sm_89',   # RTX 40 series
+    '--generate-code=arch=compute_90,code=sm_90',   # H100, RTX 40 series
+    '--generate-code=arch=compute_120,code=sm_120', # RTX 5090
+    '--generate-code=arch=compute_120,code=compute_120', # PTX for future compatibility
 ]
 
 if os.name == "posix":
-    c_flags = ['-O3', '-std=c++14']
+    c_flags = ['-O3', '-std=c++17']
 elif os.name == "nt":
     c_flags = ['/O2', '/std:c++17']
 

@@ -23,6 +23,7 @@ for module, configurables in configurables.items():
 @dataclasses.dataclass
 class Config:
     """Configuration flags for everything."""
+    use_triplane: bool = False
     seed = 0
     dataset_loader: str = 'llff'  # The type of dataset loader to use.
     batching: str = 'all_images'  # Batch composition, [single_image, all_images].
@@ -54,6 +55,15 @@ class Config:
     vis_num_rays: int = 16  # The number of rays to visualize.
     # Decimate images for tensorboard (ie, x[::d, ::d]) to conserve memory usage.
     vis_decimate: int = 0
+
+    # Weights & Biases logging configuration
+    use_wandb: bool = True  # If True, use Weights & Biases for logging
+    wandb_project: str = "zipnerf"  # WandB project name
+    wandb_entity: Optional[str] = None  # WandB entity (username/team)
+    wandb_name: Optional[str] = None  # WandB run name (defaults to exp_name if None)
+    wandb_tags: List[str] = None  # WandB run tags
+    wandb_notes: Optional[str] = None  # WandB run notes
+    disable_tensorboard: bool = False  # If True, disable tensorboard logging
 
     dpcpp_backend: bool = False  # If True, use DPC++ for the backend.
     importance_sampling: bool = False # If True, use CUDA or DPC++ implementation

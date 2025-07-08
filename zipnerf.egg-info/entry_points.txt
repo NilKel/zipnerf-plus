@@ -1,0 +1,2 @@
+[nerfstudio.method_configs]
+zipnerf_ns = zipnerf_ns.zipnerf_config:zipnerf_method

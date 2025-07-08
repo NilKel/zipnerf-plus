@@ -1,0 +1,13 @@
+# ninja log v5
+0	27403	1751478569116365653	/home/nilkel/Projects/zipnerf-pytorch/extensions/cuda/build/temp.linux-x86_64-cpython-39/home/nilkel/Projects/zipnerf-pytorch/extensions/cuda/src/bindings.o	fc1d810adeeb8d7c
+1	131371	1751478673051794505	/home/nilkel/Projects/zipnerf-pytorch/extensions/cuda/build/temp.linux-x86_64-cpython-39/home/nilkel/Projects/zipnerf-pytorch/extensions/cuda/src/pdf.o	441ba9020faf5cd1
+0	264544	1751478806199065392	/home/nilkel/Projects/zipnerf-pytorch/extensions/cuda/build/temp.linux-x86_64-cpython-39/home/nilkel/Projects/zipnerf-pytorch/extensions/cuda/src/gridencoder.o	f53159bb2fe5e271
+46	33881	1751480647333335697	/home/nilkel/Projects/zipnerf-pytorch/extensions/cuda/build/temp.linux-x86_64-cpython-39/home/nilkel/Projects/zipnerf-pytorch/extensions/cuda/src/bindings.o	12257e06f06e8c94
+46	76544	1751480690006121401	/home/nilkel/Projects/zipnerf-pytorch/extensions/cuda/build/temp.linux-x86_64-cpython-39/home/nilkel/Projects/zipnerf-pytorch/extensions/cuda/src/pdf.o	9206eb7527e9e158
+46	108414	1751480721858961262	/home/nilkel/Projects/zipnerf-pytorch/extensions/cuda/build/temp.linux-x86_64-cpython-39/home/nilkel/Projects/zipnerf-pytorch/extensions/cuda/src/gridencoder.o	65ec16275504d9bb
+47	29943	1751481000227556589	/home/nilkel/Projects/zipnerf-pytorch/extensions/cuda/build/temp.linux-x86_64-cpython-39/home/nilkel/Projects/zipnerf-pytorch/extensions/cuda/src/bindings.o	fc1d810adeeb8d7c
+48	85118	1751481055421277201	/home/nilkel/Projects/zipnerf-pytorch/extensions/cuda/build/temp.linux-x86_64-cpython-39/home/nilkel/Projects/zipnerf-pytorch/extensions/cuda/src/pdf.o	d20f2252f555c03f
+48	111509	1751481081791143638	/home/nilkel/Projects/zipnerf-pytorch/extensions/cuda/build/temp.linux-x86_64-cpython-39/home/nilkel/Projects/zipnerf-pytorch/extensions/cuda/src/gridencoder.o	caec2d025bfa6d64
+46	19234	1751481403518540155	/home/nilkel/Projects/zipnerf-pytorch/extensions/cuda/build/temp.linux-x86_64-cpython-39/home/nilkel/Projects/zipnerf-pytorch/extensions/cuda/src/bindings.o	fc1d810adeeb8d7c
+47	184739	1751481568958714795	/home/nilkel/Projects/zipnerf-pytorch/extensions/cuda/build/temp.linux-x86_64-cpython-39/home/nilkel/Projects/zipnerf-pytorch/extensions/cuda/src/pdf.o	44df587a395b3176
+46	405904	1751481790081605303	/home/nilkel/Projects/zipnerf-pytorch/extensions/cuda/build/temp.linux-x86_64-cpython-39/home/nilkel/Projects/zipnerf-pytorch/extensions/cuda/src/gridencoder.o	444158f3427caf68

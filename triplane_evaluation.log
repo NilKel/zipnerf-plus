@@ -1,0 +1,306 @@
+nohup: ignoring input
+🚀 ZipNeRF Triplane Model Organizer and Tester
+============================================================
+🔍 Found 7 triplane models:
+  • drums: lego_triplane_relu_drums_0704_0014_0704_0014 (50000 steps)
+  • ship: lego_triplane_relu_ship_0704_0731_0704_0731 (50000 steps)
+  • mic: lego_triplane_relu_mic_0704_0612_0704_0612 (50000 steps)
+  • ficus: lego_triplane_relu_ficus_0704_0152_0704_0152 (50000 steps)
+  • lego: lego_triplane_relu_lego_0703_2246_0703_2246 (50000 steps)
+  • hotdog: lego_triplane_relu_hotdog_0704_0325_0704_0325 (50000 steps)
+  • materials: lego_triplane_relu_materials_0704_0452_0704_0452 (50000 steps)
+
+🚀 RUNNING FULL EVALUATION ON 7 MODELS
+======================================================================
+
+📊 PROGRESS: 1/7 models
+
+🧪 EVALUATING: triplane_relu_drums
+📁 Scene: drums
+📁 Data: /home/nilkel/Projects/data/nerf_synthetic/drums
+🔢 Checkpoint: 50000 steps
+💻 Command: source activate_zipnerf.sh && accelerate launch eval.py --gin_configs=configs/blender.gin --gin_bindings="Config.data_dir = '/home/nilkel/Projects/data/nerf_synthetic/drums'" --gin_bindings="Config.exp_name = 'lego_triplane_relu_drums_0704_0014_0704_0014'" --gin_bindings="Config.eval_only_once = True" --gin_bindings="Config.eval_save_output = True"
+============================================================
+✅ Evaluation completed successfully in 1245.7s
+📈 Metrics: {'psnr': 5.013617742475183, 'ssim': 0.5421496704590393, 'lpips': 0.6924762123823166}
+
+📊 PROGRESS: 2/7 models
+
+🧪 EVALUATING: triplane_relu_ship
+📁 Scene: ship
+📁 Data: /home/nilkel/Projects/data/nerf_synthetic/ship
+🔢 Checkpoint: 50000 steps
+💻 Command: source activate_zipnerf.sh && accelerate launch eval.py --gin_configs=configs/blender.gin --gin_bindings="Config.data_dir = '/home/nilkel/Projects/data/nerf_synthetic/ship'" --gin_bindings="Config.exp_name = 'lego_triplane_relu_ship_0704_0731_0704_0731'" --gin_bindings="Config.eval_only_once = True" --gin_bindings="Config.eval_save_output = True"
+============================================================
+❌ Evaluation failed with return code 1
+STDOUT: 🚀 Activating ZipNeRF conda environment for RTX 5090...
+✅ Environment activated!
+📍 Current directory: /home/nilkel/Projects/zipnerf-pytorch
+🐍 Python: /home/nilkel/miniconda3/envs/zipconda/bin/python
+🔥 PyTorch: 2.7.0+cu128
+🎮 GPU: NVIDIA GeForce RTX 5090
+
+Ready to train! Use the following commands:
+• accelerate config  (first time setup)
+• accelerate launch train.py [args]  (training)
+
+
+STDERR: ipex flag is deprecated, will be removed in Accelerate v1.10. From 2.7.0, PyTorch has all needed optimizations for Intel CPU and XPU.
+Traceback (most recent call last):
+  File "/home/nilkel/Projects/zipnerf-pytorch/eval.py", line 11, in <module>
+    from internal import models
+  File "/home/nilkel/Projects/zipnerf-pytorch/internal/models.py", line 8, in <module>
+    from internal import train_utils
+  File "/home/nilkel/Projects/zipnerf-pytorch/internal/train_utils.py", line 242
+    param.grad.nan_to_num_()
+    ^
+IndentationError: expected an indented block after 'if' statement on line 241
+Traceback (most recent call last):
+  File "/home/nilkel/miniconda3/envs/zipconda/bin/accelerate", line 8, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/nilkel/miniconda3/envs/zipconda/lib/python3.11/site-packages/accelerate/commands/accelerate_cli.py", line 50, in main
+    args.func(args)
+  File "/home/nilkel/miniconda3/envs/zipconda/lib/python3.11/site-packages/accelerate/commands/launch.py", line 1199, in launch_command
+    simple_launcher(args)
+  File "/home/nilkel/miniconda3/envs/zipconda/lib/python3.11/site-packages/accelerate/commands/launch.py", line 785, in simple_launcher
+    raise subprocess.CalledProcessError(returncode=process.returncode, cmd=cmd)
+subprocess.CalledProcessError: Command '['/home/nilkel/miniconda3/envs/zipconda/bin/python3.11', 'eval.py', '--gin_configs=configs/blender.gin', "--gin_bindings=Config.data_dir = '/home/nilkel/Projects/data/nerf_synthetic/ship'", "--gin_bindings=Config.exp_name = 'lego_triplane_relu_ship_0704_0731_0704_0731'", '--gin_bindings=Config.eval_only_once = True', '--gin_bindings=Config.eval_save_output = True']' returned non-zero exit status 1.
+
+❌ Failed: Return code 1
+
+📊 PROGRESS: 3/7 models
+
+🧪 EVALUATING: triplane_relu_mic
+📁 Scene: mic
+📁 Data: /home/nilkel/Projects/data/nerf_synthetic/mic
+🔢 Checkpoint: 50000 steps
+💻 Command: source activate_zipnerf.sh && accelerate launch eval.py --gin_configs=configs/blender.gin --gin_bindings="Config.data_dir = '/home/nilkel/Projects/data/nerf_synthetic/mic'" --gin_bindings="Config.exp_name = 'lego_triplane_relu_mic_0704_0612_0704_0612'" --gin_bindings="Config.eval_only_once = True" --gin_bindings="Config.eval_save_output = True"
+============================================================
+❌ Evaluation failed with return code 1
+STDOUT: 🚀 Activating ZipNeRF conda environment for RTX 5090...
+✅ Environment activated!
+📍 Current directory: /home/nilkel/Projects/zipnerf-pytorch
+🐍 Python: /home/nilkel/miniconda3/envs/zipconda/bin/python
+🔥 PyTorch: 2.7.0+cu128
+🎮 GPU: NVIDIA GeForce RTX 5090
+
+Ready to train! Use the following commands:
+• accelerate config  (first time setup)
+• accelerate launch train.py [args]  (training)
+
+
+STDERR: ipex flag is deprecated, will be removed in Accelerate v1.10. From 2.7.0, PyTorch has all needed optimizations for Intel CPU and XPU.
+Traceback (most recent call last):
+  File "/home/nilkel/Projects/zipnerf-pytorch/eval.py", line 11, in <module>
+    from internal import models
+  File "/home/nilkel/Projects/zipnerf-pytorch/internal/models.py", line 8, in <module>
+    from internal import train_utils
+  File "/home/nilkel/Projects/zipnerf-pytorch/internal/train_utils.py", line 242
+    param.grad.nan_to_num_()
+    ^
+IndentationError: expected an indented block after 'if' statement on line 241
+Traceback (most recent call last):
+  File "/home/nilkel/miniconda3/envs/zipconda/bin/accelerate", line 8, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/nilkel/miniconda3/envs/zipconda/lib/python3.11/site-packages/accelerate/commands/accelerate_cli.py", line 50, in main
+    args.func(args)
+  File "/home/nilkel/miniconda3/envs/zipconda/lib/python3.11/site-packages/accelerate/commands/launch.py", line 1199, in launch_command
+    simple_launcher(args)
+  File "/home/nilkel/miniconda3/envs/zipconda/lib/python3.11/site-packages/accelerate/commands/launch.py", line 785, in simple_launcher
+    raise subprocess.CalledProcessError(returncode=process.returncode, cmd=cmd)
+subprocess.CalledProcessError: Command '['/home/nilkel/miniconda3/envs/zipconda/bin/python3.11', 'eval.py', '--gin_configs=configs/blender.gin', "--gin_bindings=Config.data_dir = '/home/nilkel/Projects/data/nerf_synthetic/mic'", "--gin_bindings=Config.exp_name = 'lego_triplane_relu_mic_0704_0612_0704_0612'", '--gin_bindings=Config.eval_only_once = True', '--gin_bindings=Config.eval_save_output = True']' returned non-zero exit status 1.
+
+❌ Failed: Return code 1
+
+📊 PROGRESS: 4/7 models
+
+🧪 EVALUATING: triplane_relu_ficus
+📁 Scene: ficus
+📁 Data: /home/nilkel/Projects/data/nerf_synthetic/ficus
+🔢 Checkpoint: 50000 steps
+💻 Command: source activate_zipnerf.sh && accelerate launch eval.py --gin_configs=configs/blender.gin --gin_bindings="Config.data_dir = '/home/nilkel/Projects/data/nerf_synthetic/ficus'" --gin_bindings="Config.exp_name = 'lego_triplane_relu_ficus_0704_0152_0704_0152'" --gin_bindings="Config.eval_only_once = True" --gin_bindings="Config.eval_save_output = True"
+============================================================
+❌ Evaluation failed with return code 1
+STDOUT: 🚀 Activating ZipNeRF conda environment for RTX 5090...
+✅ Environment activated!
+📍 Current directory: /home/nilkel/Projects/zipnerf-pytorch
+🐍 Python: /home/nilkel/miniconda3/envs/zipconda/bin/python
+🔥 PyTorch: 2.7.0+cu128
+🎮 GPU: NVIDIA GeForce RTX 5090
+
+Ready to train! Use the following commands:
+• accelerate config  (first time setup)
+• accelerate launch train.py [args]  (training)
+
+
+STDERR: ipex flag is deprecated, will be removed in Accelerate v1.10. From 2.7.0, PyTorch has all needed optimizations for Intel CPU and XPU.
+Traceback (most recent call last):
+  File "/home/nilkel/Projects/zipnerf-pytorch/eval.py", line 11, in <module>
+    from internal import models
+  File "/home/nilkel/Projects/zipnerf-pytorch/internal/models.py", line 8, in <module>
+    from internal import train_utils
+  File "/home/nilkel/Projects/zipnerf-pytorch/internal/train_utils.py", line 242
+    param.grad.nan_to_num_()
+    ^
+IndentationError: expected an indented block after 'if' statement on line 241
+Traceback (most recent call last):
+  File "/home/nilkel/miniconda3/envs/zipconda/bin/accelerate", line 8, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/nilkel/miniconda3/envs/zipconda/lib/python3.11/site-packages/accelerate/commands/accelerate_cli.py", line 50, in main
+    args.func(args)
+  File "/home/nilkel/miniconda3/envs/zipconda/lib/python3.11/site-packages/accelerate/commands/launch.py", line 1199, in launch_command
+    simple_launcher(args)
+  File "/home/nilkel/miniconda3/envs/zipconda/lib/python3.11/site-packages/accelerate/commands/launch.py", line 785, in simple_launcher
+    raise subprocess.CalledProcessError(returncode=process.returncode, cmd=cmd)
+subprocess.CalledProcessError: Command '['/home/nilkel/miniconda3/envs/zipconda/bin/python3.11', 'eval.py', '--gin_configs=configs/blender.gin', "--gin_bindings=Config.data_dir = '/home/nilkel/Projects/data/nerf_synthetic/ficus'", "--gin_bindings=Config.exp_name = 'lego_triplane_relu_ficus_0704_0152_0704_0152'", '--gin_bindings=Config.eval_only_once = True', '--gin_bindings=Config.eval_save_output = True']' returned non-zero exit status 1.
+
+❌ Failed: Return code 1
+
+📊 PROGRESS: 5/7 models
+
+🧪 EVALUATING: triplane_relu_lego
+📁 Scene: lego
+📁 Data: /home/nilkel/Projects/data/nerf_synthetic/lego
+🔢 Checkpoint: 50000 steps
+💻 Command: source activate_zipnerf.sh && accelerate launch eval.py --gin_configs=configs/blender.gin --gin_bindings="Config.data_dir = '/home/nilkel/Projects/data/nerf_synthetic/lego'" --gin_bindings="Config.exp_name = 'lego_triplane_relu_lego_0703_2246_0703_2246'" --gin_bindings="Config.eval_only_once = True" --gin_bindings="Config.eval_save_output = True"
+============================================================
+❌ Evaluation failed with return code 1
+STDOUT: 🚀 Activating ZipNeRF conda environment for RTX 5090...
+✅ Environment activated!
+📍 Current directory: /home/nilkel/Projects/zipnerf-pytorch
+🐍 Python: /home/nilkel/miniconda3/envs/zipconda/bin/python
+🔥 PyTorch: 2.7.0+cu128
+🎮 GPU: NVIDIA GeForce RTX 5090
+
+Ready to train! Use the following commands:
+• accelerate config  (first time setup)
+• accelerate launch train.py [args]  (training)
+
+
+STDERR: ipex flag is deprecated, will be removed in Accelerate v1.10. From 2.7.0, PyTorch has all needed optimizations for Intel CPU and XPU.
+Traceback (most recent call last):
+  File "/home/nilkel/Projects/zipnerf-pytorch/eval.py", line 11, in <module>
+    from internal import models
+  File "/home/nilkel/Projects/zipnerf-pytorch/internal/models.py", line 8, in <module>
+    from internal import train_utils
+  File "/home/nilkel/Projects/zipnerf-pytorch/internal/train_utils.py", line 242
+    param.grad.nan_to_num_()
+    ^
+IndentationError: expected an indented block after 'if' statement on line 241
+Traceback (most recent call last):
+  File "/home/nilkel/miniconda3/envs/zipconda/bin/accelerate", line 8, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/nilkel/miniconda3/envs/zipconda/lib/python3.11/site-packages/accelerate/commands/accelerate_cli.py", line 50, in main
+    args.func(args)
+  File "/home/nilkel/miniconda3/envs/zipconda/lib/python3.11/site-packages/accelerate/commands/launch.py", line 1199, in launch_command
+    simple_launcher(args)
+  File "/home/nilkel/miniconda3/envs/zipconda/lib/python3.11/site-packages/accelerate/commands/launch.py", line 785, in simple_launcher
+    raise subprocess.CalledProcessError(returncode=process.returncode, cmd=cmd)
+subprocess.CalledProcessError: Command '['/home/nilkel/miniconda3/envs/zipconda/bin/python3.11', 'eval.py', '--gin_configs=configs/blender.gin', "--gin_bindings=Config.data_dir = '/home/nilkel/Projects/data/nerf_synthetic/lego'", "--gin_bindings=Config.exp_name = 'lego_triplane_relu_lego_0703_2246_0703_2246'", '--gin_bindings=Config.eval_only_once = True', '--gin_bindings=Config.eval_save_output = True']' returned non-zero exit status 1.
+
+❌ Failed: Return code 1
+
+📊 PROGRESS: 6/7 models
+
+🧪 EVALUATING: triplane_relu_hotdog
+📁 Scene: hotdog
+📁 Data: /home/nilkel/Projects/data/nerf_synthetic/hotdog
+🔢 Checkpoint: 50000 steps
+💻 Command: source activate_zipnerf.sh && accelerate launch eval.py --gin_configs=configs/blender.gin --gin_bindings="Config.data_dir = '/home/nilkel/Projects/data/nerf_synthetic/hotdog'" --gin_bindings="Config.exp_name = 'lego_triplane_relu_hotdog_0704_0325_0704_0325'" --gin_bindings="Config.eval_only_once = True" --gin_bindings="Config.eval_save_output = True"
+============================================================
+❌ Evaluation failed with return code 1
+STDOUT: 🚀 Activating ZipNeRF conda environment for RTX 5090...
+✅ Environment activated!
+📍 Current directory: /home/nilkel/Projects/zipnerf-pytorch
+🐍 Python: /home/nilkel/miniconda3/envs/zipconda/bin/python
+🔥 PyTorch: 2.7.0+cu128
+🎮 GPU: NVIDIA GeForce RTX 5090
+
+Ready to train! Use the following commands:
+• accelerate config  (first time setup)
+• accelerate launch train.py [args]  (training)
+
+
+STDERR: ipex flag is deprecated, will be removed in Accelerate v1.10. From 2.7.0, PyTorch has all needed optimizations for Intel CPU and XPU.
+Traceback (most recent call last):
+  File "/home/nilkel/Projects/zipnerf-pytorch/eval.py", line 11, in <module>
+    from internal import models
+  File "/home/nilkel/Projects/zipnerf-pytorch/internal/models.py", line 8, in <module>
+    from internal import train_utils
+  File "/home/nilkel/Projects/zipnerf-pytorch/internal/train_utils.py", line 242
+    param.grad.nan_to_num_()
+    ^
+IndentationError: expected an indented block after 'if' statement on line 241
+Traceback (most recent call last):
+  File "/home/nilkel/miniconda3/envs/zipconda/bin/accelerate", line 8, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/nilkel/miniconda3/envs/zipconda/lib/python3.11/site-packages/accelerate/commands/accelerate_cli.py", line 50, in main
+    args.func(args)
+  File "/home/nilkel/miniconda3/envs/zipconda/lib/python3.11/site-packages/accelerate/commands/launch.py", line 1199, in launch_command
+    simple_launcher(args)
+  File "/home/nilkel/miniconda3/envs/zipconda/lib/python3.11/site-packages/accelerate/commands/launch.py", line 785, in simple_launcher
+    raise subprocess.CalledProcessError(returncode=process.returncode, cmd=cmd)
+subprocess.CalledProcessError: Command '['/home/nilkel/miniconda3/envs/zipconda/bin/python3.11', 'eval.py', '--gin_configs=configs/blender.gin', "--gin_bindings=Config.data_dir = '/home/nilkel/Projects/data/nerf_synthetic/hotdog'", "--gin_bindings=Config.exp_name = 'lego_triplane_relu_hotdog_0704_0325_0704_0325'", '--gin_bindings=Config.eval_only_once = True', '--gin_bindings=Config.eval_save_output = True']' returned non-zero exit status 1.
+
+❌ Failed: Return code 1
+
+📊 PROGRESS: 7/7 models
+
+🧪 EVALUATING: triplane_relu_materials
+📁 Scene: materials
+📁 Data: /home/nilkel/Projects/data/nerf_synthetic/materials
+🔢 Checkpoint: 50000 steps
+💻 Command: source activate_zipnerf.sh && accelerate launch eval.py --gin_configs=configs/blender.gin --gin_bindings="Config.data_dir = '/home/nilkel/Projects/data/nerf_synthetic/materials'" --gin_bindings="Config.exp_name = 'lego_triplane_relu_materials_0704_0452_0704_0452'" --gin_bindings="Config.eval_only_once = True" --gin_bindings="Config.eval_save_output = True"
+============================================================
+❌ Evaluation failed with return code 1
+STDOUT: 🚀 Activating ZipNeRF conda environment for RTX 5090...
+✅ Environment activated!
+📍 Current directory: /home/nilkel/Projects/zipnerf-pytorch
+🐍 Python: /home/nilkel/miniconda3/envs/zipconda/bin/python
+🔥 PyTorch: 2.7.0+cu128
+🎮 GPU: NVIDIA GeForce RTX 5090
+
+Ready to train! Use the following commands:
+• accelerate config  (first time setup)
+• accelerate launch train.py [args]  (training)
+
+
+STDERR: ipex flag is deprecated, will be removed in Accelerate v1.10. From 2.7.0, PyTorch has all needed optimizations for Intel CPU and XPU.
+Traceback (most recent call last):
+  File "/home/nilkel/Projects/zipnerf-pytorch/eval.py", line 11, in <module>
+    from internal import models
+  File "/home/nilkel/Projects/zipnerf-pytorch/internal/models.py", line 8, in <module>
+    from internal import train_utils
+  File "/home/nilkel/Projects/zipnerf-pytorch/internal/train_utils.py", line 242
+    param.grad.nan_to_num_()
+    ^
+IndentationError: expected an indented block after 'if' statement on line 241
+Traceback (most recent call last):
+  File "/home/nilkel/miniconda3/envs/zipconda/bin/accelerate", line 8, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/nilkel/miniconda3/envs/zipconda/lib/python3.11/site-packages/accelerate/commands/accelerate_cli.py", line 50, in main
+    args.func(args)
+  File "/home/nilkel/miniconda3/envs/zipconda/lib/python3.11/site-packages/accelerate/commands/launch.py", line 1199, in launch_command
+    simple_launcher(args)
+  File "/home/nilkel/miniconda3/envs/zipconda/lib/python3.11/site-packages/accelerate/commands/launch.py", line 785, in simple_launcher
+    raise subprocess.CalledProcessError(returncode=process.returncode, cmd=cmd)
+subprocess.CalledProcessError: Command '['/home/nilkel/miniconda3/envs/zipconda/bin/python3.11', 'eval.py', '--gin_configs=configs/blender.gin', "--gin_bindings=Config.data_dir = '/home/nilkel/Projects/data/nerf_synthetic/materials'", "--gin_bindings=Config.exp_name = 'lego_triplane_relu_materials_0704_0452_0704_0452'", '--gin_bindings=Config.eval_only_once = True', '--gin_bindings=Config.eval_save_output = True']' returned non-zero exit status 1.
+
+❌ Failed: Return code 1
+
+📊 EVALUATION SUMMARY
+==============================
+✅ Successful: 1
+❌ Failed: 6
+📊 Total: 7
+📄 JSON report saved: triplane_results/triplane_evaluation_20250704_174948.json
+📊 CSV report saved: triplane_results/triplane_evaluation_20250704_174948.csv
+📝 Summary report saved: triplane_results/triplane_summary_20250704_174948.txt
+
+🎉 Script completed!
