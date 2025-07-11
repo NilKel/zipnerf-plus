@@ -53,7 +53,7 @@ def evaluate_density(model, accelerator: accelerate.Accelerator,
                       (accelerator.process_index + 1) * rays_per_host
         chunk_means = pnts[start:stop]
         chunk_stds = torch.full_like(chunk_means[..., 0], std_value)
-        raw_density = model.nerf_mlp.predict_density(chunk_means[:, None], chunk_stds[:, None], no_warp=True)[0]
+        raw_density = model.nerf_mlp.predict_density(chunk_means[:, None], chunk_stds[:, None], no_warp=True, training_step=None)[0]
         density = F.softplus(raw_density + model.nerf_mlp.density_bias)
         density = accelerator.gather(density)
         if padding > 0:
@@ -94,7 +94,7 @@ def evaluate_color(model, accelerator: accelerate.Accelerator,
         chunk_stds = torch.full_like(chunk_means[..., 0], std_value)
         chunk_viewdirs = torch.zeros_like(chunk_means)
         ray_results = model.nerf_mlp(False, chunk_means[:, None, None], chunk_stds[:, None, None],
-                                     chunk_viewdirs)
+                                     chunk_viewdirs, training_step=None)
         rgb = ray_results['rgb'][:, 0]
         rgb = accelerator.gather(rgb)
         if padding > 0:
@@ -142,7 +142,8 @@ def evaluate_color_projection(model, accelerator: accelerate.Accelerator, vertic
                 False,
                 batch,
                 compute_extras=False,
-                train_frac=1)
+                train_frac=1,
+                training_step=None)
         rgb = renderings[-1]['rgb']
         acc = renderings[-1]['acc']
 

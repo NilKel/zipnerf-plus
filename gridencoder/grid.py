@@ -198,3 +198,80 @@ class GridEncoder(nn.Module):
             raise ValueError('grad is None, should be called after loss.backward() and before optimizer.step()!')
 
         self.backend.funcs.grad_total_variation(inputs, self.embeddings, self.embeddings.grad, self.offsets, weight, B, D, C, L, S, H, self.gridtype_id, self.align_corners)
+
+
+class PotentialEncoder(nn.Module):
+    def __init__(self, input_dim=3, num_levels=16, level_dim=2,
+                 per_level_scale=2, base_resolution=16,
+                 log2_hashmap_size=19, desired_resolution=None,
+                 gridtype='hash', align_corners=False,
+                 interpolation='linear', init_std=1e-4):
+        super().__init__()
+
+        self.input_dim = input_dim
+        self.num_levels = num_levels
+        self.level_dim = level_dim
+        self.vector_dim = 3
+        self.output_dim = self.num_levels * self.level_dim
+
+        common_kwargs = {
+            'input_dim': input_dim,
+            'num_levels': num_levels,
+            'level_dim': level_dim,
+            'per_level_scale': per_level_scale,
+            'base_resolution': base_resolution,
+            'log2_hashmap_size': log2_hashmap_size,
+            'desired_resolution': desired_resolution,
+            'gridtype': gridtype,
+            'align_corners': align_corners,
+            'interpolation': interpolation,
+            'init_std': init_std,
+        }
+
+        self.encoder_x = GridEncoder(**common_kwargs)
+        self.encoder_y = GridEncoder(**common_kwargs)
+        self.encoder_z = GridEncoder(**common_kwargs)
+
+        # For compatibility
+        self.n_params = self.encoder_x.n_params * 3
+        # The following are for compatibility with code that inspects the encoder
+        self.embeddings = self.encoder_x.embeddings
+        self.offsets = self.encoder_x.offsets
+        self.grid_sizes = self.encoder_x.grid_sizes
+        self.backend = self.encoder_x.backend
+        self.gridtype = self.encoder_x.gridtype
+        self.gridtype_id = self.encoder_x.gridtype_id
+        self.align_corners = self.encoder_x.align_corners
+        self.interpolation = self.encoder_x.interpolation
+        self.interp_id = self.encoder_x.interp_id
+        self.base_resolution = self.encoder_x.base_resolution
+        self.per_level_scale = self.encoder_x.per_level_scale
+        self.init_std = self.encoder_x.init_std
+        self.idx = self.encoder_x.idx
+
+
+    def reset_parameters(self):
+        self.encoder_x.reset_parameters()
+        self.encoder_y.reset_parameters()
+        self.encoder_z.reset_parameters()
+
+    def __repr__(self):
+        base_repr = self.encoder_x.__repr__()
+        return f"PotentialEncoder (wraps 3 GridEncoders):\n - {base_repr}"
+    
+    def forward(self, inputs, bound=1):
+        # inputs: [..., input_dim], normalized real world positions in [-bound, bound]
+        # return: [..., num_levels * level_dim, 3]
+
+        x_out = self.encoder_x(inputs, bound=bound)
+        y_out = self.encoder_y(inputs, bound=bound)
+        z_out = self.encoder_z(inputs, bound=bound)
+
+        return torch.stack([x_out, y_out, z_out], dim=-1)
+
+    # always run in float precision!
+    @torch.cuda.amp.autocast(enabled=False)
+    def grad_total_variation(self, weight=1e-7, inputs=None, bound=1, B=1000000):
+        self.encoder_x.grad_total_variation(weight, inputs, bound, B)
+        self.encoder_y.grad_total_variation(weight, inputs, bound, B)
+        self.encoder_z.grad_total_variation(weight, inputs, bound, B)

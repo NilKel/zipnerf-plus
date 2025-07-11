@@ -1,0 +1,15 @@
+include 'configs/potential_binary.gin'
+
+# High Confidence Field Learning Rate Configuration
+# Tests if confidence field benefits from faster learning
+
+# Higher learning rate for confidence field
+Config.confidence_lr_init = 0.05     # 5x higher than main model (0.01)
+Config.confidence_lr_final = 0.005   # 5x higher than main model (0.001)
+
+# Same warmup schedule as main model
+Config.confidence_lr_delay_steps = 5000
+Config.confidence_lr_delay_mult = 1e-8
+
+# Update experiment name to reflect configuration
+Config.exp_name = "lego_binary_high_conf_lr" 

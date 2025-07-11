@@ -1,0 +1,11 @@
+include 'configs/potential_binary.gin'
+
+# Confidence Field Learning Rate Multiplier Configuration
+# Uses multiplier approach for easier experimentation
+
+# Use multiplier to scale main learning rate for confidence field
+# Set to 2.0 for 2x higher confidence LR, 0.5 for 2x lower, etc.
+Config.confidence_lr_multiplier = 2.0  # 2x higher than main model
+
+# Update experiment name to reflect configuration
+Config.exp_name = "lego_binary_conf_mult_2x" 

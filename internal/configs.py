@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from absl import flags
 import gin
 from internal import utils
+from datetime import datetime
 
 gin.add_config_file_search_path('configs/')
 
@@ -24,6 +25,14 @@ for module, configurables in configurables.items():
 class Config:
     """Configuration flags for everything."""
     use_triplane: bool = False
+    use_potential: bool = False
+    confidence_grid_resolution: Tuple[int, int, int] = (128, 128, 128)
+    confidence_reg_mult: float = 0.0  # Multiplier for confidence field regularization loss
+    binary_occupancy: bool = False  # If True, use binary occupancy with STE instead of smooth sigmoid
+    
+    # Debug/sanity check options for confidence field
+    debug_confidence_grid_path: Optional[str] = None  # Path to pretrained confidence grid for debugging
+    freeze_debug_confidence: bool = True  # If True, freeze the debug confidence grid (no gradients)
     seed = 0
     dataset_loader: str = 'llff'  # The type of dataset loader to use.
     batching: str = 'all_images'  # Batch composition, [single_image, all_images].
@@ -47,6 +56,7 @@ class Config:
     near: float = 2.  # Near plane distance.
     far: float = 6.  # Far plane distance.
     exp_name: str = "test"  # experiment name
+    comment: str = ""  # Optional comment to append to experiment name
     data_dir: Optional[str] = "/SSD_DISK/datasets/360_v2/bicycle"  # Input data directory.
     vocab_tree_path: Optional[str] = None  # Path to vocab tree for COLMAP.
     render_chunk_size: int = 65536  # Chunk size for whole-image renderings.
@@ -57,7 +67,7 @@ class Config:
     vis_decimate: int = 0
 
     # Weights & Biases logging configuration
-    use_wandb: bool = True  # If True, use Weights & Biases for logging
+    use_wandb: bool = False  # If True, use Weights & Biases for logging
     wandb_project: str = "zipnerf"  # WandB project name
     wandb_entity: Optional[str] = None  # WandB entity (username/team)
     wandb_name: Optional[str] = None  # WandB run name (defaults to exp_name if None)
@@ -74,6 +84,7 @@ class Config:
     early_exit_steps: Optional[int] = None  # Early stopping, for debugging.
     checkpoint_every: int = 5000  # The number of steps to save a checkpoint.
     resume_from_checkpoint: bool = True  # whether to resume from checkpoint.
+    no_wandb: bool = False
     checkpoints_total_limit: int = 1
     gradient_scaling: bool = False  # If True, scale gradients as in https://gradient-scaling.github.io/.
     print_every: int = 100  # The number of steps between reports to tensorboard.
@@ -97,7 +108,14 @@ class Config:
     lr_init: float = 0.01  # The initial learning rate.
     lr_final: float = 0.001  # The final learning rate.
     lr_delay_steps: int = 5000  # The number of "warmup" learning steps.
-    lr_delay_mult: float = 1e-8  # How much sever the "warmup" should be.
+    lr_delay_mult: float = 1e-8
+    
+    # Confidence field specific learning rates
+    confidence_lr_init: Optional[float] = None  # Initial LR for confidence field (None = use lr_init)
+    confidence_lr_final: Optional[float] = None  # Final LR for confidence field (None = use lr_final)
+    confidence_lr_delay_steps: Optional[int] = None  # Warmup steps for confidence field (None = use lr_delay_steps)
+    confidence_lr_delay_mult: Optional[float] = None  # Warmup mult for confidence field (None = use lr_delay_mult)
+    confidence_lr_multiplier: float = 1.0  # Multiplier for confidence field LR (applied to main LR if specific rates not set)
     adam_beta1: float = 0.9  # Adam's beta2 hyperparameter.
     adam_beta2: float = 0.99  # Adam's beta2 hyperparameter.
     adam_eps: float = 1e-15  # Adam's epsilon hyperparameter.
@@ -173,6 +191,44 @@ class Config:
     tsdf_resolution: int = 512
     truncation_margin: float = 5.0
     tsdf_max_radius: float = 10.0  # in world space
+    
+    def __post_init__(self):
+        """Auto-generate experiment names and adjust settings based on configuration."""
+        # Extract scene name from data_dir
+        scene_name = os.path.basename(self.data_dir.rstrip('/'))
+        
+        # Determine model type suffix
+        if self.use_potential and self.use_triplane:
+            model_suffix = "potential_triplane"
+        elif self.use_triplane:
+            model_suffix = "triplane"
+        elif self.use_potential:
+            model_suffix = "potential"
+        else:
+            model_suffix = "baseline"
+            
+        # Generate timestamp
+        timestamp = datetime.now().strftime("%m%d_%H%M")
+        
+        # Set wandb project for synthetic datasets
+        if 'nerf_synthetic' in self.data_dir:
+            self.wandb_project = "my-nerf-experiments"
+            
+        # Auto-generate experiment name if not set or is default
+        if self.exp_name == "test":
+            self.exp_name = f"{scene_name}_{model_suffix}_{self.max_steps}_{timestamp}"
+            
+        # Append comment if provided
+        if self.comment:
+            self.exp_name = f"{self.exp_name}_{self.comment}"
+            
+        # Set wandb_name if not explicitly set
+        if self.wandb_name is None:
+            self.wandb_name = self.exp_name
+            
+        # Adjust batch size for potential encoder if memory constrained
+        if self.use_potential and self.use_triplane and self.batch_size > 4096:
+            print(f"Warning: Large batch size ({self.batch_size}) with potential+triplane may cause OOM. Consider reducing.")
 
 
 def define_common_flags():

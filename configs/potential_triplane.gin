@@ -1,0 +1,30 @@
+# Generic Potential+Triplane configuration
+# Use with: --gin_bindings='Config.data_dir="/path/to/scene"'
+include 'configs/blender.gin'
+
+# Model configuration
+Config.use_potential = True
+Config.use_triplane = False
+Config.binary_occupancy = True
+
+# Default data configuration - can be overridden
+Config.data_dir = "/home/nilkel/Projects/data/nerf_synthetic/lego"
+
+# Training settings optimized for potential+triplane
+Config.batch_size = 4096  # Conservative default for memory efficiency
+Config.max_steps = 25000
+Config.factor = 4
+
+# Wandb settings
+Config.use_wandb = True
+Config.wandb_project = "my-nerf-experiments"
+
+# Potential encoder specific settings
+Config.confidence_reg_mult = 0  # Regularization for confidence field 
+
+# High Confidence Field Learning Rate Configuration
+# Tests if confidence field benefits from faster learning
+
+# Higher learning rate for confidence field
+Config.confidence_lr_init = 0.05     # 5x higher than main model (0.01)
+Config.confidence_lr_final = 0.005   # 5x higher than main model (0.001)

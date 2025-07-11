@@ -68,7 +68,18 @@ def main(unused_argv):
     accelerate.utils.set_seed(config.seed, device_specific=True)
     # setup model and optimizer
     model = models.Model(config=config)
-    optimizer, lr_fn = train_utils.create_optimizer(config, model)
+    optimizer_result = train_utils.create_optimizer(config, model)
+    
+    # Handle different return formats for optimizer creation
+    if len(optimizer_result) == 3:
+        # Separate learning rates for confidence field
+        optimizer, lr_fn_main, lr_fn_confidence = optimizer_result
+        use_separate_confidence_lr = True
+    else:
+        # Standard single learning rate
+        optimizer, lr_fn_main = optimizer_result
+        lr_fn_confidence = None
+        use_separate_confidence_lr = False
 
     # load dataset
     dataset = datasets.load_dataset('train', config.data_dir, config)
@@ -120,34 +131,46 @@ def main(unused_argv):
 
     # Initialize logging systems
     if accelerator.is_main_process:
-        # Initialize Weights & Biases
+        # Initialize Weights & Biases with comprehensive config logging
         if config.use_wandb:
-            wandb_config = {
-                'batch_size': config.batch_size,
-                'max_steps': config.max_steps,
-                'lr_init': config.lr_init,
-                'lr_final': config.lr_final,
-                'lr_delay_steps': config.lr_delay_steps,
-                'data_loss_mult': config.data_loss_mult,
-                'interlevel_loss_mult': config.interlevel_loss_mult,
-                'anti_interlevel_loss_mult': config.anti_interlevel_loss_mult,
-                'distortion_loss_mult': config.distortion_loss_mult,
-                'hash_decay_mults': config.hash_decay_mults,
-                'dataset_loader': config.dataset_loader,
-                'exp_name': config.exp_name,
-                'data_dir': config.data_dir,
-                'factor': config.factor,
-                'num_params': num_params,
-                'seed': config.seed,
-                'near': config.near,
-                'far': config.far,
-                'model_type': 'zipnerf',
-                'device': str(accelerator.device),
-                'world_size': config.world_size,
-            }
+            # Convert config to dictionary, excluding non-serializable fields
+            import dataclasses
+            config_dict = dataclasses.asdict(config)
             
-            # Add model architecture details
+            # Remove non-serializable fields that wandb can't handle
+            non_serializable_keys = [
+                'render_dist_curve_fn',  # numpy function
+                'wandb_tags',  # might be None and cause issues
+                'pulse_width',  # list that might cause issues
+            ]
+            for key in non_serializable_keys:
+                config_dict.pop(key, None)
+            
+            # Convert None values to strings for better readability in wandb
+            for key, value in config_dict.items():
+                if value is None:
+                    config_dict[key] = 'None'
+            
+            # Organize config into logical groups for better wandb UI
+            wandb_config = {}
+            
+            # Core experiment settings
             wandb_config.update({
+                'exp_name': config.exp_name,
+                'comment': config.comment,
+                'data_dir': config.data_dir,
+                'dataset_loader': config.dataset_loader,
+                'seed': config.seed,
+                'model_type': 'zipnerf',
+                'num_params': num_params,
+            })
+            
+            # Model architecture
+            wandb_config.update({
+                'use_triplane': config.use_triplane,
+                'use_potential': config.use_potential,
+                'confidence_grid_resolution': str(config.confidence_grid_resolution),
+                'confidence_reg_mult': config.confidence_reg_mult,
                 'num_prop_samples': module.num_prop_samples,
                 'num_nerf_samples': module.num_nerf_samples,
                 'num_levels': module.num_levels,
@@ -155,6 +178,80 @@ def main(unused_argv):
                 'single_mlp': module.single_mlp,
                 'num_glo_features': module.num_glo_features,
             })
+            
+            # Training hyperparameters
+            wandb_config.update({
+                'batch_size': config.batch_size,
+                'max_steps': config.max_steps,
+                'lr_init': config.lr_init,
+                'lr_final': config.lr_final,
+                'lr_delay_steps': config.lr_delay_steps,
+                'lr_delay_mult': config.lr_delay_mult,
+                'adam_beta1': config.adam_beta1,
+                'adam_beta2': config.adam_beta2,
+                'adam_eps': config.adam_eps,
+                'grad_max_norm': config.grad_max_norm,
+                'grad_max_val': config.grad_max_val,
+                'gradient_scaling': config.gradient_scaling,
+            })
+            
+            # Confidence field learning rate hyperparameters (if applicable)
+            if config.use_potential:
+                wandb_config.update({
+                    'confidence_lr_init': config.confidence_lr_init,
+                    'confidence_lr_final': config.confidence_lr_final,
+                    'confidence_lr_delay_steps': config.confidence_lr_delay_steps,
+                    'confidence_lr_delay_mult': config.confidence_lr_delay_mult,
+                    'confidence_lr_multiplier': config.confidence_lr_multiplier,
+                    'use_separate_confidence_lr': use_separate_confidence_lr,
+            })
+            
+            # Loss configuration
+            wandb_config.update({
+                'data_loss_type': config.data_loss_type,
+                'data_loss_mult': config.data_loss_mult,
+                'data_coarse_loss_mult': config.data_coarse_loss_mult,
+                'interlevel_loss_mult': config.interlevel_loss_mult,
+                'anti_interlevel_loss_mult': config.anti_interlevel_loss_mult,
+                'distortion_loss_mult': config.distortion_loss_mult,
+                'opacity_loss_mult': config.opacity_loss_mult,
+                'orientation_loss_mult': config.orientation_loss_mult,
+                'orientation_coarse_loss_mult': config.orientation_coarse_loss_mult,
+                'predicted_normal_loss_mult': config.predicted_normal_loss_mult,
+                'predicted_normal_coarse_loss_mult': config.predicted_normal_coarse_loss_mult,
+                'hash_decay_mults': config.hash_decay_mults,
+                'charb_padding': config.charb_padding,
+            })
+            
+            # Data processing
+            wandb_config.update({
+                'factor': config.factor,
+                'patch_size': config.patch_size,
+                'batching': config.batching,
+                'multiscale': config.multiscale,
+                'multiscale_levels': config.multiscale_levels,
+                'randomized': config.randomized,
+                'near': config.near,
+                'far': config.far,
+                'forward_facing': config.forward_facing,
+                'disable_multiscale_loss': config.disable_multiscale_loss,
+            })
+            
+            # System configuration
+            wandb_config.update({
+                'device': str(accelerator.device),
+                'world_size': config.world_size,
+                'checkpoint_every': config.checkpoint_every,
+                'print_every': config.print_every,
+                'train_render_every': config.train_render_every,
+                'resume_from_checkpoint': config.resume_from_checkpoint,
+                'checkpoints_total_limit': config.checkpoints_total_limit,
+            })
+            
+            # Add all remaining config items with 'other_' prefix to avoid cluttering main groups
+            for key, value in config_dict.items():
+                if key not in wandb_config:
+                    wandb_config[f'other_{key}'] = value
             
             # Initialize wandb run
             wandb.init(
@@ -213,7 +310,20 @@ def main(unused_argv):
                 reset_stats = False
 
             # use lr_fn to control learning rate
-            learning_rate = lr_fn(step)
+            if use_separate_confidence_lr:
+                # Apply different learning rates to main model and confidence field
+                learning_rate_main = lr_fn_main(step)
+                learning_rate_confidence = lr_fn_confidence(step)
+                
+                # Apply learning rates to respective parameter groups
+                optimizer.param_groups[0]['lr'] = learning_rate_main  # Main model parameters
+                optimizer.param_groups[1]['lr'] = learning_rate_confidence  # Confidence field parameters
+                
+                # Use main learning rate for logging
+                learning_rate = learning_rate_main
+            else:
+                # Standard single learning rate for all parameters
+                learning_rate = lr_fn_main(step)
             for param_group in optimizer.param_groups:
                 param_group['lr'] = learning_rate
 
@@ -229,7 +339,8 @@ def main(unused_argv):
                     batch,
                     train_frac=train_frac,
                     compute_extras=compute_extras,
-                    zero_glo=False)
+                    zero_glo=False,
+                    training_step=step)
 
             losses = {}
 
@@ -267,6 +378,23 @@ def main(unused_argv):
                     config.predicted_normal_loss_mult > 0):
                 losses['predicted_normals'] = train_utils.predicted_normal_loss(
                     module, ray_history, config)
+            
+            # confidence field regularization loss (potential encoder)
+            if config.use_potential and hasattr(module, 'confidence_field'):
+                confidence_reg_loss = module.confidence_field.get_regularization_loss()
+                losses['confidence_reg'] = config.confidence_reg_mult * confidence_reg_loss
+                
+                # Log confidence sparsity metrics
+                with torch.no_grad():
+                    conf_sigmoid = module.confidence_field.get_confidence()
+                    stats['confidence_sparsity_l1'] = conf_sigmoid.sum().item()
+                    stats['confidence_sparsity_mean'] = conf_sigmoid.mean().item()
+                    stats['confidence_sparsity_std'] = conf_sigmoid.std().item()
+                    # Count how many voxels are above certain thresholds (measures scene density)
+                    stats['confidence_active_01'] = (conf_sigmoid > 0.1).float().mean().item()
+                    stats['confidence_active_05'] = (conf_sigmoid > 0.5).float().mean().item()
+                    stats['confidence_active_09'] = (conf_sigmoid > 0.9).float().mean().item()
+            
             loss = sum(losses.values())
             stats['loss'] = loss.item()
             stats['losses'] = tree_map(lambda x: x.item(), losses)
@@ -331,6 +459,8 @@ def main(unused_argv):
 
                         summ_fn('train_num_params', num_params)
                         summ_fn('train_learning_rate', learning_rate)
+                        if use_separate_confidence_lr:
+                            summ_fn('train_learning_rate_confidence', learning_rate_confidence)
                         summ_fn('train_steps_per_sec', steps_per_sec)
                         summ_fn('train_rays_per_sec', rays_per_sec)
 
@@ -358,6 +488,10 @@ def main(unused_argv):
                             'training/elapsed_time': elapsed_time,
                             'training/train_frac': train_frac,
                         }
+                        
+                        # Add confidence learning rate if using separate LR
+                        if use_separate_confidence_lr:
+                            wandb_log['training/learning_rate_confidence'] = learning_rate_confidence
                         
                         # Log all average statistics
                         for k, v in avg_stats.items():

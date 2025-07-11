@@ -1,0 +1,45 @@
+include 'configs/zipnerf/360.gin'
+
+# Binary Occupancy Potential Field Configuration
+# Enables binary occupancy with Straight-Through Estimator (STE)
+
+Config.use_potential = True
+Config.use_triplane = True
+Config.binary_occupancy = True
+
+# Potential field specific settings
+Config.confidence_grid_resolution = (128, 128, 128)
+Config.confidence_reg_mult = 0.0  # May need to adjust for binary case
+
+# Training settings optimized for potential field
+Config.max_steps = 25000
+Config.lr_init = 0.01
+Config.lr_final = 0.001
+Config.lr_delay_steps = 5000
+
+# Hash grid settings
+Model.grid_num_levels = 10
+Model.grid_level_interval = 2
+Model.grid_level_dim = 4
+Model.grid_base_resolution = 16
+Model.grid_disired_resolution = 8192
+Model.grid_log2_hashmap_size = 21
+
+# Sampling
+Model.num_prop_samples = 64
+Model.num_nerf_samples = 32
+
+# Regularization
+Model.hash_decay_mults = 0.1
+
+# Batch size (may need adjustment for memory with binary occupancy)
+Config.batch_size = 16384
+
+# Data loss
+Config.data_loss_type = 'charb'
+Config.data_loss_mult = 1.0
+
+# Logging
+Config.print_every = 100
+Config.train_render_every = 500
+Config.checkpoint_every = 5000 

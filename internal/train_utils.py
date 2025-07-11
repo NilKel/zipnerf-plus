@@ -259,6 +259,56 @@ def create_optimizer(config: configs.Config, model):
         lr_init=config.lr_init,
         lr_final=config.lr_final,
         **lr_kwargs)
+    
+    # Separate confidence field parameters if they exist and separate LR is specified
+    confidence_params = []
+    main_params = []
+    
+    if hasattr(model, 'confidence_field') and model.confidence_field is not None:
+        confidence_params = list(model.confidence_field.parameters())
+        
+        # Get all model parameters except confidence field
+        confidence_param_ids = {id(p) for p in confidence_params}
+        main_params = [p for p in model.parameters() if id(p) not in confidence_param_ids]
+    else:
+        main_params = list(model.parameters())
+    
+    # Check if we need separate learning rates for confidence field
+    use_separate_confidence_lr = (
+        confidence_params and 
+        (config.confidence_lr_init is not None or 
+         config.confidence_lr_final is not None or 
+         config.confidence_lr_multiplier != 1.0)
+    )
+    
+    if use_separate_confidence_lr:
+        # Create confidence field learning rate function
+        conf_lr_init = config.confidence_lr_init if config.confidence_lr_init is not None else (config.lr_init * config.confidence_lr_multiplier)
+        conf_lr_final = config.confidence_lr_final if config.confidence_lr_final is not None else (config.lr_final * config.confidence_lr_multiplier)
+        conf_lr_delay_steps = config.confidence_lr_delay_steps if config.confidence_lr_delay_steps is not None else config.lr_delay_steps
+        conf_lr_delay_mult = config.confidence_lr_delay_mult if config.confidence_lr_delay_mult is not None else config.lr_delay_mult
+        
+        conf_lr_kwargs = {
+            'max_steps': config.max_steps,
+            'lr_delay_steps': conf_lr_delay_steps,
+            'lr_delay_mult': conf_lr_delay_mult,
+        }
+        
+        lr_fn_confidence = lambda step: math.learning_rate_decay(
+            step,
+            lr_init=conf_lr_init,
+            lr_final=conf_lr_final,
+            **conf_lr_kwargs)
+        
+        # Create optimizer with parameter groups
+        param_groups = [
+            {'params': main_params, 'lr': config.lr_init},
+            {'params': confidence_params, 'lr': conf_lr_init}
+        ]
+        optimizer = torch.optim.Adam(param_groups, **adam_kwargs)
+        
+        return optimizer, lr_fn_main, lr_fn_confidence
+    else:
+        # Standard single learning rate
     optimizer = torch.optim.Adam(model.parameters(), lr=config.lr_init, **adam_kwargs)
-
     return optimizer, lr_fn_main

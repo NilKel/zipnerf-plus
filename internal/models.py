@@ -15,8 +15,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils._pytree import tree_map
 from tqdm import tqdm
-from gridencoder import GridEncoder
-from internal.tri_mip import TriMipEncoding
+from gridencoder import GridEncoder, PotentialEncoder
+from internal.tri_mip import TriMipEncoding, PotentialTriMipEncoding
+from internal.field import ConfidenceField
 try:
     from torch_scatter import segment_coo
 except:
@@ -42,6 +43,8 @@ class Model(nn.Module):
     use_viewdirs: bool = True  # If True, use view directions as input.
     raydist_fn = None  # The curve used for ray dists.
     single_jitter: bool = True  # If True, jitter whole rays instead of samples.
+    use_potential: bool = False # If True, use potential grid encoder
+    confidence_grid_resolution: tuple[int, int, int] = (128, 128, 128)
     dilation_multiplier: float = 0.5  # How much to dilate intervals relatively.
     dilation_bias: float = 0.0025  # How much to dilate intervals absolutely.
     num_glo_features: int = 0  # GLO vector length, disabled if 0.
@@ -61,6 +64,15 @@ class Model(nn.Module):
         super().__init__()
         set_kwargs(self, kwargs)
         self.config = config
+
+        if self.config.use_potential:
+            self.confidence_field = ConfidenceField(
+                resolution=self.config.confidence_grid_resolution, 
+                device='cuda' if not self.config.dpcpp_backend else 'xpu',
+                pretrained_grid_path=self.config.debug_confidence_grid_path,
+                freeze_pretrained=self.config.freeze_debug_confidence,
+                binary_occupancy=self.config.binary_occupancy
+            )
 
         from extensions import Backend
         Backend.set_backend('dpcpp' if self.config.dpcpp_backend else 'cuda')
@@ -109,6 +121,7 @@ class Model(nn.Module):
             train_frac,
             compute_extras,
             zero_glo=True,
+            training_step=None,
     ):
         """The mip-NeRF Model.
 
@@ -122,6 +135,9 @@ class Model(nn.Module):
     Returns:
       ret: list, [*(rgb, distance, acc)]
     """
+        if self.config.use_potential:
+            self.confidence_field.compute_gradient()
+
         device = batch['origins'].device
         if self.num_glo_features > 0:
             if not zero_glo:
@@ -242,6 +258,8 @@ class Model(nn.Module):
                 imageplane=batch.get('imageplane'),
                 glo_vec=None if is_prop else glo_vec,
                 exposure=batch.get('exposure_values'),
+                confidence_field=self.confidence_field if self.config.use_potential else None,
+                training_step=training_step,
             )
             if self.config.gradient_scaling:
                 ray_results['rgb'], ray_results['density'] = train_utils.GradientScaler.apply(
@@ -308,17 +326,35 @@ class Model(nn.Module):
 
             if self.training:
                 # Compute the hash decay loss for this level.
-                idx = mlp.encoder.idx
-                param = mlp.encoder.embeddings
-                if self.config.dpcpp_backend:
-                    ray_results['loss_hash_decay'] = (param ** 2).mean()
+                if isinstance(mlp.encoder, PotentialEncoder):
+                    encoders = [mlp.encoder.encoder_x, mlp.encoder.encoder_y, mlp.encoder.encoder_z]
+                    total_loss = 0
+                    for enc in encoders:
+                        param = enc.embeddings
+                        if self.config.dpcpp_backend:
+                            total_loss += (param ** 2).mean()
+                        else:
+                            idx = enc.idx.to(param.device)
+                            loss = segment_coo(
+                                param ** 2,
+                                idx,
+                                torch.zeros(idx.max() + 1, param.shape[-1], device=param.device),
+                                reduce='mean'
+                            ).mean()
+                            total_loss += loss
+                    ray_results['loss_hash_decay'] = total_loss / 3
                 else:
-                    loss_hash_decay = segment_coo(param ** 2,
-                                                  idx,
-                                                  torch.zeros(idx.max() + 1, param.shape[-1], device=param.device),
-                                                  reduce='mean'
-                                                  ).mean()
-                    ray_results['loss_hash_decay'] = loss_hash_decay
+                    idx = mlp.encoder.idx
+                    param = mlp.encoder.embeddings
+                    if self.config.dpcpp_backend:
+                        ray_results['loss_hash_decay'] = (param ** 2).mean()
+                    else:
+                        loss_hash_decay = segment_coo(param ** 2,
+                                                      idx.to(param.device),
+                                                      torch.zeros(idx.max() + 1, param.shape[-1], device=param.device),
+                                                      reduce='mean'
+                                                      ).mean()
+                        ray_results['loss_hash_decay'] = loss_hash_decay
 
             renderings.append(rendering)
             ray_results['sdist'] = sdist.clone()
@@ -378,6 +414,7 @@ class MLP(nn.Module):
     grid_log2_hashmap_size: int = 21
     net_width_glo: int = 128  # The width of the second part of MLP.
     net_depth_glo: int = 2  # The width of the second part of MLP.
+    use_potential: bool = False # If true, use potential encoder
 
     def __init__(self, config=None, **kwargs):
         super().__init__()
@@ -404,19 +441,30 @@ class MLP(nn.Module):
             dim_dir_enc = self.dir_enc_fn(torch.zeros(1, 3), None).shape[-1]
         self.grid_num_levels = int(
             np.log(self.grid_disired_resolution / self.grid_base_resolution) / np.log(self.grid_level_interval)) + 1
-        self.encoder = GridEncoder(input_dim=3,
-                                   num_levels=self.grid_num_levels,
-                                   level_dim=self.grid_level_dim,
-                                   base_resolution=self.grid_base_resolution,
-                                   desired_resolution=self.grid_disired_resolution,
-                                   log2_hashmap_size=self.grid_log2_hashmap_size,
-                                   gridtype='hash',
-                                   align_corners=False)
         
-        # Add triplane components - always create them to ensure parameters are registered
-        self.tri_mip_encoding = TriMipEncoding(n_levels=8, plane_size=512, feature_dim=16)
+        use_potential = config is not None and getattr(config, 'use_potential', False)
+        Encoder = PotentialEncoder if use_potential else GridEncoder
+        self.encoder = Encoder(input_dim=3,
+                                num_levels=self.grid_num_levels,
+                                level_dim=self.grid_level_dim,
+                                base_resolution=self.grid_base_resolution,
+                                desired_resolution=self.grid_disired_resolution,
+                                log2_hashmap_size=self.grid_log2_hashmap_size,
+                                gridtype='hash',
+                                align_corners=False)
+        
+        # Add triplane components
+        TriplaneEncoder = PotentialTriMipEncoding if use_potential else TriMipEncoding
+        self.tri_mip_encoding = TriplaneEncoder(n_levels=8, plane_size=512, feature_dim=16)
+
+        projection_in_dim = self.tri_mip_encoding.dim_out
+        if use_potential:
+            projection_out_dim = self.encoder.output_dim * 3
+        else:
+            projection_out_dim = self.encoder.output_dim
+
         self.tri_mip_projection = nn.Sequential(
-            nn.Linear(self.tri_mip_encoding.dim_out, self.encoder.output_dim),
+            nn.Linear(projection_in_dim, projection_out_dim),
             nn.ReLU()
         )
         
@@ -470,7 +518,7 @@ class MLP(nn.Module):
                     last_dim_rgb += input_dim_rgb
             self.rgb_layer = nn.Linear(last_dim_rgb, self.num_rgb_channels)
 
-    def predict_density(self, means, stds, rand=False, no_warp=False):
+    def predict_density(self, means, stds, rand=False, no_warp=False, confidence_field=None, training_step=None):
         """Helper function to output density."""
         # Encode input positions
         if self.warp_fn is not None and not no_warp:
@@ -483,7 +531,73 @@ class MLP(nn.Module):
         # Check if triplane is enabled using stored config
         use_triplane = self.config is not None and getattr(self.config, 'use_triplane', False)
         
-        if use_triplane:
+        # Move grid_sizes to the correct device and calculate weights once.
+        grid_sizes = self.encoder.grid_sizes.to(stds.device)
+        weights = torch.erf(1 / torch.sqrt(8 * stds[..., None] ** 2 * grid_sizes ** 2 + 1e-8))
+
+        if self.config is not None and getattr(self.config, 'use_potential', False):
+            # Path for potential field computation
+            if confidence_field is None:
+                raise ValueError("Confidence field must be provided when using potential.")
+
+            # 1. Get potential features from PotentialEncoder
+            potential_features_raw = self.encoder(means, bound=1)
+            # Reshape to (..., num_levels, level_dim, 3)
+            hash_features_per_level = potential_features_raw.view(
+                *potential_features_raw.shape[:-2], self.encoder.num_levels, self.encoder.level_dim, 3
+            )
+            
+            # 2. Interpolate confidence and gradient
+            # The `means` are already in [-1, 1] for the encoder, which is what query expects.
+            # aabb is (-2, -2, -2) to (2, 2, 2). So means is in (-1,1)
+            # so we normalize means to be in [-1, 1]
+            means_for_conf = means.view(-1, 3)
+            sampled_conf, sampled_grad = confidence_field.query(means_for_conf)
+            
+            sampled_conf = sampled_conf.view(*hash_features_per_level.shape[:-3], 1, 1, 1) # (..., 1, 1, 1)
+            sampled_grad = sampled_grad.view(*hash_features_per_level.shape[:-3], 1, 1, 3) # (..., 1, 1, 3)
+
+            if use_triplane:
+                # Normalize coordinates for triplane - clamp to ensure valid range
+                normalized_means = torch.clamp((means + 1.0) / 2.0, 0.0, 1.0)  # Convert from [-1,1] to [0,1]
+                
+                # Calculate mip level from stds
+                stds_mean = stds.mean(dim=-1, keepdim=True)
+                trimip_level = torch.log2(stds_mean.clamp(min=1e-8, max=1e2)) + 1.0
+                trimip_level = torch.clamp(trimip_level, 0, self.tri_mip_encoding.n_levels - 1)
+
+                tri_mip_features = self.tri_mip_encoding(normalized_means, trimip_level.unsqueeze(-1))
+                projected_trimip_features = self.tri_mip_projection(tri_mip_features)
+
+                trimip_features_per_level = projected_trimip_features.view(
+                    *projected_trimip_features.shape[:-1], self.encoder.num_levels, self.grid_level_dim, 3
+                )
+                
+                blended_features_per_level = (weights[..., None, None] * hash_features_per_level) + ((1 - weights[..., None, None]) * trimip_features_per_level)
+                
+            else:
+                blended_features_per_level = hash_features_per_level
+
+            # 4. Compute dot product and multiply by confidence/occupancy
+            # Dot product between feature and occupancy gradient
+            
+            dot_product = torch.sum(blended_features_per_level * sampled_grad, dim=-1)
+            
+            # Apply the appropriate formulation based on binary_occupancy flag
+            if self.config.binary_occupancy:
+                # Binary occupancy formulation: binary_occ * (blended_features ⋅ gradient)
+                features = -sampled_conf.squeeze(-1) * dot_product
+            else:
+                # Original smooth formulation: -confidence * (blended_features ⋅ gradient)  
+                features = -sampled_conf.squeeze(-1) * dot_product
+
+            if not use_triplane:
+                # The shape is now (..., num_levels, level_dim)
+                features = (features * weights[..., None]).mean(dim=-3).flatten(-2, -1)
+            else:
+                features = features.mean(dim=-3).flatten(-2, -1)
+
+        elif use_triplane:
             # Triplane + Hashgrid blending - match original ZipNeRF processing exactly
             hash_features_raw = self.encoder(means, bound=1)
             hash_features_per_level = hash_features_raw.unflatten(-1, (self.encoder.num_levels, -1))
@@ -502,19 +616,15 @@ class MLP(nn.Module):
             projected_trimip_features = self.tri_mip_projection(tri_mip_features)
             trimip_features_per_level = projected_trimip_features.unflatten(-1, (self.encoder.num_levels, -1))
 
-            # Calculate weights with numerical stability - same as original
-            weights = torch.erf(1 / torch.sqrt(8 * stds[..., None] ** 2 * self.encoder.grid_sizes ** 2 + 1e-8))
-
             # Blend the unweighted features: zipnerf weight for hashgrid, (1-zipnerf_weight) for triplane
             # This creates a weighted combination of hash and triplane features at each level
             blended_features_per_level = (weights[..., None] * hash_features_per_level) + ((1 - weights[..., None]) * trimip_features_per_level)
-            
             # Apply the same ZipNeRF processing as original: multiply by weights, mean across levels, flatten
-            features = (blended_features_per_level * weights[..., None]).mean(dim=-3).flatten(-2, -1)
+            features = (blended_features_per_level).mean(dim=-3).flatten(-2, -1).squeeze(-1)
+            
         else:
             # Original hashgrid-only path
             features = self.encoder(means, bound=1).unflatten(-1, (self.encoder.num_levels, -1))
-            weights = torch.erf(1 / torch.sqrt(8 * stds[..., None] ** 2 * self.encoder.grid_sizes ** 2 + 1e-8))
             features = (features * weights[..., None]).mean(dim=-3).flatten(-2, -1)
         
         if self.scale_featurization:
@@ -527,8 +637,33 @@ class MLP(nn.Module):
                                       )
             featurized_w = (2 * weights.mean(dim=-2) - 1) * (self.encoder.init_std ** 2 + vl2mean).sqrt()
             features = torch.cat([features, featurized_w], dim=-1)
+        
         x = self.density_layer(features)
+        
         raw_density = x[..., 0]  # Hardcoded to a single channel.
+        
+        # Apply tanh(α∥v∥2) scaling for potential encoder case
+        # This implements the density modulation described in the paper where:
+        # - v is the feature vector after potential field processing  
+        # - α is scheduled: 10^4 for steps < 1000, 10^5 for steps >= 1000
+        # - The scaling helps with fast convergence initially and fine-tuning later
+        # if self.config is not None and getattr(self.config, 'use_potential', False):
+            # Compute 2-norm squared of features (v vector after potential processing)
+            # v_norm_squared = torch.sum(features ** 2, dim=-1)
+            
+            # Set alpha according to paper: 1e4 for steps < 1000, 1e5 afterward
+            # if training_step is not None and training_step >= 1000:
+            #     alpha = 1e5  # Higher alpha for fine-tuning phase
+            # else:
+            #     alpha = 1e4  # Lower alpha for fast convergence phase
+            
+            # Allow config override for experimentation
+            # alpha = getattr(self.config, 'potential_alpha', alpha)
+            
+            # Apply tanh(α∥v∥2) scaling to modulate density
+            # tanh_scaling = torch.tanh(alpha * v_norm_squared)
+            # raw_density = raw_density * tanh_scaling
+        
         # Add noise to regularize the density predictions if needed.
         if rand and (self.density_noise > 0):
             raw_density += self.density_noise * torch.randn_like(raw_density)
@@ -541,7 +676,9 @@ class MLP(nn.Module):
                 imageplane=None,
                 glo_vec=None,
                 exposure=None,
-                no_warp=False):
+                no_warp=False,
+                confidence_field=None,
+                training_step=None):
         """Evaluate the MLP.
 
     Args:
@@ -558,6 +695,7 @@ class MLP(nn.Module):
         learned vignette mapping.
       glo_vec: [..., num_glo_features], The GLO vector for each ray.
       exposure: [..., 1], exposure value (shutter_speed * ISO) for each ray.
+      confidence_field: The confidence field module.
 
     Returns:
       rgb: [..., num_rgb_channels].
@@ -567,13 +705,13 @@ class MLP(nn.Module):
       roughness: [..., 1], or None.
     """
         if self.disable_density_normals:
-            raw_density, x, means_contract = self.predict_density(means, stds, rand=rand, no_warp=no_warp)
+            raw_density, x, means_contract = self.predict_density(means, stds, rand=rand, no_warp=no_warp, confidence_field=confidence_field, training_step=training_step)
             raw_grad_density = None
             normals = None
         else:
             with torch.enable_grad():
                 means.requires_grad_(True)
-                raw_density, x, means_contract = self.predict_density(means, stds, rand=rand, no_warp=no_warp)
+                raw_density, x, means_contract = self.predict_density(means, stds, rand=rand, no_warp=no_warp, confidence_field=confidence_field, training_step=training_step)
                 d_output = torch.ones_like(raw_density, requires_grad=False, device=raw_density.device)
                 raw_grad_density = torch.autograd.grad(
                     outputs=raw_density,
@@ -772,7 +910,8 @@ def render_image(model,
                                                   chunk_batch,
                                                   train_frac=train_frac,
                                                   compute_extras=True,
-                                                  zero_glo=True)
+                                                  zero_glo=True,
+                                                  training_step=None)
 
         gather = lambda v: accelerator.gather(v.contiguous())[:-padding] \
             if padding > 0 else accelerator.gather(v.contiguous())

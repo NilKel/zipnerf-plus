@@ -1,1 +1,1 @@
-from .grid import GridEncoder
+from .grid import GridEncoder, PotentialEncoder
