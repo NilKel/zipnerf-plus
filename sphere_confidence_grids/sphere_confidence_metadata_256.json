@@ -1,0 +1,36 @@
+{
+    "sphere_radius": 1.0,
+    "sphere_center": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "bbox_size": 2.0,
+    "resolution": [
+        256,
+        256,
+        256
+    ],
+    "steepness": 10.0,
+    "offset": 0.0,
+    "coordinate_system": "right_handed_z_up",
+    "grid_range": [
+        -2.0,
+        2.0
+    ],
+    "sdf_range": [
+        -0.9864155054092407,
+        2.464101552963257
+    ],
+    "logits_range": [
+        -24.641016006469727,
+        9.864154815673828
+    ],
+    "confidence_range": [
+        1.9885783991702155e-11,
+        0.9999480247497559
+    ],
+    "high_confidence_voxels": 1084592,
+    "total_voxels": 16777216,
+    "mean_confidence": 0.07106958329677582
+}

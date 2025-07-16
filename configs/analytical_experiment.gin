@@ -1,0 +1,73 @@
+# Analytical Oracle Experiment Configuration
+# This config sets up the controlled experiment where we test if V_feat = -G⋅∇O
+# can be used by an MLP to reconstruct a sphere using perfect analytical functions.
+
+# Base configuration
+Config.exp_name = 'analytical_oracle_experiment'
+Config.dataset_loader = 'blender'
+Config.data_dir = '../data/nerf_synthetic/sphere_analytical_simple'
+
+# Camera settings
+Config.near = 2.0
+Config.far = 6.0
+Config.factor = 4  # Downsample images to 200x200 for faster training
+
+# Analytical experiment flags
+Config.analytical_experiment = True
+Config.sphere_radius = 1.0
+Config.sphere_center = [0.0, 0.0, 0.0]
+Config.sphere_epsilon = 0.05  # Shell thickness for hollow sphere
+
+# Disable normal potential field components (use analytical instead)
+Config.use_potential = False
+Config.use_triplane = False
+Config.binary_occupancy = False
+Config.analytical_gradient = False
+
+# Training settings - fast convergence expected for analytical case
+Config.max_steps = 3000
+Config.lr_init = 0.02
+Config.lr_final = 0.002
+Config.lr_delay_steps = 500
+Config.batch_size = 4096
+
+# Model architecture - optimized for the analytical test
+Model.num_prop_samples = 32
+Model.num_nerf_samples = 16
+Model.num_levels = 2  # Only 1 proposal + 1 nerf level for simplicity
+
+# Disable gradient stopping between levels for cleaner gradients
+Model.stop_level_grad = False
+
+# Simpler MLP architecture for faster convergence
+PropMLP.disable_density_normals = True
+PropMLP.disable_rgb = True
+PropMLP.grid_num_levels = 8
+PropMLP.grid_level_dim = 2
+PropMLP.grid_base_resolution = 16
+PropMLP.grid_disired_resolution = 512
+
+NerfMLP.disable_density_normals = True
+NerfMLP.grid_num_levels = 8
+NerfMLP.grid_level_dim = 2
+NerfMLP.grid_base_resolution = 16
+NerfMLP.grid_disired_resolution = 512
+
+# Simple loss configuration
+Config.data_loss_type = 'mse'  # Use MSE for cleaner gradients
+Config.data_loss_mult = 1.0
+
+# Disable regularization terms
+Config.confidence_reg_mult = 0.0
+Config.hash_decay_mults = []
+
+# Evaluation settings
+Config.eval_only_once = False
+Config.eval_quantize_metrics = True
+Config.train_render_every = 500
+Config.checkpoint_every = 1000
+
+# Logging
+Config.print_every = 50
+Config.use_wandb = True
+Config.wandb_project = "analytical-oracle-experiment" 

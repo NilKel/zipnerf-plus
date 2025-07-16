@@ -1,0 +1,56 @@
+# Sphere Experiment with Analytical Gradient Testing
+# This config tests the new analytical gradient method vs. stencil-based finite differences
+
+Config.exp_name = 'sphere_analytical_grad_256'
+Config.dataset_loader = 'blender'
+Config.near = 2.0
+Config.far = 6.0
+Config.factor = 4  # Downsample to match blender.gin memory usage
+Config.use_tiffs = False
+Config.eval_only_once = False
+Config.eval_quantize_metrics = True
+Config.eval_crop_borders = 8
+
+# WandB logging
+Config.use_wandb = False
+Config.wandb_project = 'zipnerf_sphere_experiments'
+Config.wandb_name = 'sphere_analytical_gradient_256'
+Config.wandb_tags = ['sphere', 'potential_encoder', 'analytical_gradient']
+Config.wandb_notes = 'Testing analytical gradient (autograd) vs stencil-based finite differences'
+
+# Sphere experiment settings
+Config.sphere_experiment = False
+Config.sphere_radius = 1.0
+Config.sphere_center = [0.0, 0.0, 0.0]
+
+# Enable potential encoder with analytical gradients (NEW METHOD)
+Config.use_potential = True
+Config.use_triplane = False  # Temporarily disable to avoid OOM
+Config.binary_occupancy = False  # Use smooth sigmoid
+Config.analytical_gradient = True  # NEW: Use analytical gradient (autograd) instead of stencil-based
+Config.confidence_grid_resolution = (256, 256, 256)
+Config.confidence_reg_mult = 0.0
+Config.debug_confidence_grid_path = 'sphere_confidence_probabilities/sphere_confidence_probs_256.pt'
+Config.freeze_debug_confidence = True
+
+# Training settings - reduced for faster testing
+Config.max_steps = 5000
+Config.lr_init = 0.01
+Config.lr_final = 0.001
+Config.lr_delay_steps = 1000
+Config.batch_size = 2048
+Config.checkpoint_every = 2500
+
+# Model configuration
+Model.raydist_fn = None
+
+# Memory efficient MLP settings
+PropMLP.disable_density_normals = True
+PropMLP.disable_rgb = True
+PropMLP.grid_level_dim = 1
+
+NerfMLP.disable_density_normals = True
+NerfMLP.grid_level_dim = 1
+
+# Data loss
+Config.data_loss_type = 'charb' 

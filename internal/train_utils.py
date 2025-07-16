@@ -310,5 +310,21 @@ def create_optimizer(config: configs.Config, model):
         return optimizer, lr_fn_main, lr_fn_confidence
     else:
         # Standard single learning rate
-    optimizer = torch.optim.Adam(model.parameters(), lr=config.lr_init, **adam_kwargs)
+        optimizer = torch.optim.Adam(model.parameters(), lr=config.lr_init, **adam_kwargs)
     return optimizer, lr_fn_main
+
+
+def create_divergence_optimizer(config: configs.Config, model):
+    """Creates optimizer for divergence MLP training."""
+    if not (config.use_divergence_regularization and hasattr(model, 'div_mlp') and model.div_mlp is not None):
+        return None
+    
+    adam_kwargs = {
+        'betas': [config.adam_beta1, config.adam_beta2],
+        'eps': config.adam_eps,
+    }
+    
+    # Create optimizer only for divergence MLP parameters
+    div_optimizer = torch.optim.Adam(model.div_mlp.parameters(), lr=config.div_mlp_lr, **adam_kwargs)
+    
+    return div_optimizer

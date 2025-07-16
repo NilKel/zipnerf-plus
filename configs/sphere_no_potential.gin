@@ -1,0 +1,50 @@
+# Sphere Experiment without Potential Encoder + WandB
+Config.exp_name = 'sphere_no_potential'
+Config.dataset_loader = 'blender'
+Config.near = 2.0
+Config.far = 6.0
+Config.factor = 4  # Downsample to match blender.gin memory usage
+Config.use_tiffs = False
+Config.eval_only_once = False
+Config.eval_quantize_metrics = True
+Config.eval_crop_borders = 8
+
+# WandB logging
+Config.use_wandb = True
+Config.wandb_project = 'zipnerf_sphere_experiments'
+Config.wandb_name = 'sphere_no_potential'
+Config.wandb_tags = ['sphere', 'standard_encoder', 'pre_initialized_hashgrid']
+Config.wandb_notes = 'Sphere experiment using standard GridEncoder with pre-initialized hashgrid'
+
+# Sphere experiment settings (for initialization reference)
+Config.sphere_experiment = False
+Config.sphere_radius = 1.0
+Config.sphere_center = [0.0, 0.0, 0.0]
+
+# Disable potential encoder, no confidence grids
+Config.use_potential = False
+Config.use_triplane = False  # Temporarily disable to avoid OOM
+Config.binary_occupancy = False  # Not applicable when use_potential=False
+Config.analytical_gradient = False  # Not applicable when use_potential=False
+
+# Training settings
+Config.max_steps = 10000
+Config.lr_init = 0.01
+Config.lr_final = 0.001
+Config.lr_delay_steps = 1000
+Config.batch_size = 2048
+Config.checkpoint_every = 2500
+
+# Model configuration
+Model.raydist_fn = None
+
+# Memory efficient MLP settings
+PropMLP.disable_density_normals = True
+PropMLP.disable_rgb = True
+PropMLP.grid_level_dim = 1
+
+NerfMLP.disable_density_normals = True
+NerfMLP.grid_level_dim = 1
+
+# Data loss
+Config.data_loss_type = 'charb' 

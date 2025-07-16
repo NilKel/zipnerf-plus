@@ -1,0 +1,50 @@
+# Lego scene with Divergence Regularization
+# Configuration for training ZipNeRF with alternating divergence regularization
+
+# Base configuration
+include 'configs/blender.gin'
+
+# Dataset configuration
+Config.data_dir = "/home/nilkel/Projects/data/nerf_synthetic/lego"
+
+# Core model settings
+Config.use_potential = True
+Config.use_triplane = False
+Config.binary_occupancy = False
+
+# Divergence regularization settings
+Config.use_divergence_regularization = True
+Config.divergence_reg_mult = 0.01  # λ_reg in the paper
+Config.grid_optim_every_k_iters = 10  # Train div_mlp every 50 iterations
+Config.div_mlp_hidden_dim = 32  # Hidden dimension for DivergenceMLP
+Config.div_mlp_num_layers = 2  # Number of hidden layers in DivergenceMLP
+Config.div_mlp_lr = 0.001  # Learning rate for divergence MLP optimizer
+
+# Confidence field settings
+Config.confidence_grid_resolution = (128, 128, 128)
+Config.confidence_reg_mult = 0.01
+
+# Training settings (optimized for memory with divergence regularization)
+Config.batch_size = 4096  # Reduced to avoid OOM with additional memory overhead
+Config.max_steps = 25000
+Config.lr_init = 0.01
+Config.lr_final = 0.001
+Config.lr_delay_steps = 5000
+
+# Wandb logging
+Config.use_wandb = True
+Config.wandb_project = "zipnerf-divergence"
+
+# Training monitoring
+Config.print_every = 100
+Config.train_render_every = 500
+Config.checkpoint_every = 5000
+
+# Hash grid regularization (from blender.gin)
+Config.hash_decay_mults = 10
+
+# Loss configuration
+Config.data_loss_type = 'charb'
+Config.data_loss_mult = 1.0
+Config.anti_interlevel_loss_mult = 0.01
+Config.distortion_loss_mult = 0.005 

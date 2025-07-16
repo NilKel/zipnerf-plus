@@ -1,0 +1,66 @@
+⚠️  TMUX SESSION EXITED UNEXPECTEDLY AT Fri Jul 11 05:37:00 PM CEST 2025
+Exit code: 0
+Last 50 lines of training log:
+=====================================
+🔧 Setting up environment...
+📋 Environment verification:
+Active environment: 
+Python path: /home/nilkel/miniconda3/envs/zipnerf2/bin/python
+PyTorch version: 2.7.1+cu128
+CUDA available: True
+GPU name: NVIDIA GeForce RTX 5090
+
+🚀 Starting ZipNeRF Potential+Triplane training...
+🎬 Scene: lego
+💬 Comment: binocc_unfixedoptconf_nogate_noreg_5xconf
+🔲 Binary Occupancy: False
+⏰ Started at: Fri Jul 11 05:36:24 PM CEST 2025
+📁 Data directory: /home/nilkel/Projects/data/nerf_synthetic/lego
+📋 Config: configs/potential_triplane.gin
+
+💻 Training command:
+accelerate launch train.py --gin_configs=configs/potential_triplane.gin --gin_bindings="Config.data_dir = '/home/nilkel/Projects/data/nerf_synthetic/lego'" --gin_bindings="Config.debug_confidence_grid_path = 'debug_grids/debug_confidence_grid_128.pt'" --gin_bindings="Config.freeze_debug_confidence = False" --gin_bindings="Config.binary_occupancy = False" --gin_bindings="Config.comment = 'binocc_unfixedoptconf_nogate_noreg_5xconf'"
+
+ipex flag is deprecated, will be removed in Accelerate v1.10. From 2.7.0, PyTorch has all needed optimizations for Intel CPU and XPU.
+Traceback (most recent call last):
+  File "/home/nilkel/Projects/zipnerf-pytorch/train.py", line 17, in <module>
+    from internal import models
+  File "/home/nilkel/Projects/zipnerf-pytorch/internal/models.py", line 8, in <module>
+    from internal import train_utils
+  File "/home/nilkel/Projects/zipnerf-pytorch/internal/train_utils.py", line 313
+    optimizer = torch.optim.Adam(model.parameters(), lr=config.lr_init, **adam_kwargs)
+    ^
+IndentationError: expected an indented block
+Traceback (most recent call last):
+  File "/home/nilkel/miniconda3/envs/zipnerf2/bin/accelerate", line 8, in <module>
+    sys.exit(main())
+  File "/home/nilkel/miniconda3/envs/zipnerf2/lib/python3.9/site-packages/accelerate/commands/accelerate_cli.py", line 50, in main
+    args.func(args)
+  File "/home/nilkel/miniconda3/envs/zipnerf2/lib/python3.9/site-packages/accelerate/commands/launch.py", line 1199, in launch_command
+    simple_launcher(args)
+  File "/home/nilkel/miniconda3/envs/zipnerf2/lib/python3.9/site-packages/accelerate/commands/launch.py", line 785, in simple_launcher
+    raise subprocess.CalledProcessError(returncode=process.returncode, cmd=cmd)
+subprocess.CalledProcessError: Command '['/home/nilkel/miniconda3/envs/zipnerf2/bin/python3.9', 'train.py', '--gin_configs=configs/potential_triplane.gin', "--gin_bindings=Config.data_dir = '/home/nilkel/Projects/data/nerf_synthetic/lego'", "--gin_bindings=Config.debug_confidence_grid_path = 'debug_grids/debug_confidence_grid_128.pt'", '--gin_bindings=Config.freeze_debug_confidence = False', '--gin_bindings=Config.binary_occupancy = False', "--gin_bindings=Config.comment = 'binocc_unfixedoptconf_nogate_noreg_5xconf'"]' returned non-zero exit status 1.
+
+✅ Training completed successfully!
+⏰ Finished at: Fri Jul 11 05:36:31 PM CEST 2025
+📄 Full log: ./tmux_logs/training_pt_lego_binocc_unfixedoptconf_nogate_noreg_5xconf_0711_173615.log
+📁 Check results in: exp/
+
+❌ Training failed at line 75. Check logs: ./tmux_logs/training_pt_lego_binocc_unfixedoptconf_nogate_noreg_5xconf_0711_173615.log
+=====================================
+Process list at exit:
+root        1504  0.0  0.0 112248  3220 ?        Ssl  Jun03   0:00 /usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal
+root       11054  0.0  0.0  61392  3960 ?        S    Jun03   0:00 python3 /usr/lib/software-properties/software-properties-dbus
+lisa     1994820 57.1  1.2 25921540 844948 ?     Sl   14:44  98:52 python my_train.py --exp_dir /mnt/lisa_hdd/I2IReg/train/experiment_outputs --checkpoints_dir /mnt/lisa_hdd/I2IReg/train/experiment_outputs
+lisa     1995004 83.3  0.1 19420468 100680 ?     Rl   14:44 143:58 python my_train.py --exp_dir /mnt/lisa_hdd/I2IReg/train/experiment_outputs --checkpoints_dir /mnt/lisa_hdd/I2IReg/train/experiment_outputs
+lisa     1995005 78.2  0.4 19586684 265524 ?     Rl   14:44 135:07 python my_train.py --exp_dir /mnt/lisa_hdd/I2IReg/train/experiment_outputs --checkpoints_dir /mnt/lisa_hdd/I2IReg/train/experiment_outputs
+lisa     1995006 80.0  0.3 19524148 223712 ?     Rl   14:44 138:21 python my_train.py --exp_dir /mnt/lisa_hdd/I2IReg/train/experiment_outputs --checkpoints_dir /mnt/lisa_hdd/I2IReg/train/experiment_outputs
+lisa     1995007 80.8  0.4 19575104 276028 ?     Rl   14:44 139:46 python my_train.py --exp_dir /mnt/lisa_hdd/I2IReg/train/experiment_outputs --checkpoints_dir /mnt/lisa_hdd/I2IReg/train/experiment_outputs
+lisa     1995194  3.1  0.2 21250156 158756 ?     Sl   14:44   5:24 python my_train.py --exp_dir /mnt/lisa_hdd/I2IReg/train/experiment_outputs --checkpoints_dir /mnt/lisa_hdd/I2IReg/train/experiment_outputs
+lisa     1995195  3.0  0.2 21250168 159096 ?     Sl   14:44   5:17 python my_train.py --exp_dir /mnt/lisa_hdd/I2IReg/train/experiment_outputs --checkpoints_dir /mnt/lisa_hdd/I2IReg/train/experiment_outputs
+lisa     1995196  3.1  0.2 21250180 158332 ?     Sl   14:44   5:28 python my_train.py --exp_dir /mnt/lisa_hdd/I2IReg/train/experiment_outputs --checkpoints_dir /mnt/lisa_hdd/I2IReg/train/experiment_outputs
+lisa     1995197  3.1  0.2 21250192 158592 ?     Sl   14:44   5:25 python my_train.py --exp_dir /mnt/lisa_hdd/I2IReg/train/experiment_outputs --checkpoints_dir /mnt/lisa_hdd/I2IReg/train/experiment_outputs
+nilkel   2057827  0.0  0.0  15680  4088 ?        Ss   17:36   0:00 tmux new-session -d -s train_pt_lego_0711_173615 -c /home/nilkel/Projects/zipnerf-pytorch
+nilkel   2057837  0.0  0.0  10056  1664 pts/6    S    17:36   0:00 /bin/bash ./train_pt_tmux.sh lego binocc_unfixedoptconf_nogate_noreg_5xconf
+nilkel   2057956  0.0  0.0  14500  4880 pts/6    S+   17:36   0:00 tmux attach-session -t train_pt_lego_0711_173615

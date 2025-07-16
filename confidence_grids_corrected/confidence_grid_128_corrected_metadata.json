@@ -1,0 +1,30 @@
+{
+  "resolution": 128,
+  "bound": 1.0,
+  "method": "learned_match",
+  "std_value": 0.01,
+  "checkpoint_step": 25000,
+  "checkpoint_path": "exp/lego_baseline_25000_0704_2320/checkpoints/025000",
+  "correction_applied": true,
+  "coordinate_bounds": "[-1.0, 1.0]",
+  "logits_stats": {
+    "min": -0.885003387928009,
+    "max": 0.3403850793838501,
+    "mean": -0.8005045652389526,
+    "std": 0.3075523376464844
+  },
+  "density_stats": {
+    "min": 3.6562056286891446e-28,
+    "max": 122.90919494628906,
+    "mean": 1.3828198909759521,
+    "std": 6.406062602996826
+  },
+  "comparison": {
+    "correlation": 0.017099497839808464,
+    "mse": 0.2158818542957306,
+    "learned_stats": {
+      "mean": 0.31225505471229553,
+      "high_conf_ratio": 0.3119521141052246
+    }
+  }
+}

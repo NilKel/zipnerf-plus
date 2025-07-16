@@ -1,0 +1,79 @@
+# Sphere P_ENCODER Testing Configuration
+# This config tests P_ENCODER (tensor potential encoding) on the analytical sphere dataset
+
+# Base configuration
+Config.exp_name = 'sphere_p_encoder_test_neg_64_cellsize_eqpot_2order'
+Config.dataset_loader = 'blender'
+Config.data_dir = '../data/nerf_synthetic/sphere_analytical'
+
+# Camera and scene settings
+Config.near = 2.0
+Config.far = 6.0
+Config.factor = 4  # Downsample to 200x200 for faster testing
+Config.use_tiffs = False
+Config.eval_only_once = False
+Config.eval_quantize_metrics = True
+Config.eval_crop_borders = 8
+
+# P_ENCODER CONFIGURATION
+# Enable positional encoder with P_ENCODER (tensor potential encoding)
+
+# Enable positional encoder for both NerfMLP and PropMLP
+NerfMLP.use_positional_encoder = True
+NerfMLP.pos_enc_num_freqs = 10
+NerfMLP.pos_enc_log_sampling = True
+NerfMLP.feature_mlp_hidden_dim = 64
+NerfMLP.feature_mlp_num_layers = 2
+
+PropMLP.use_positional_encoder = True
+PropMLP.pos_enc_num_freqs = 10
+PropMLP.pos_enc_log_sampling = True
+PropMLP.feature_mlp_hidden_dim = 64
+PropMLP.feature_mlp_num_layers = 2
+
+# Confidence field configuration (required for positional encoders)
+Config.use_potential = True  # P_ENCODER: Use tensor potential encoding G · ∇occupancy
+Config.confidence_grid_resolution = (64, 64, 64)
+Config.confidence_reg_mult = 0.0
+
+# Use the sigmoid probability grids (non-binary, frozen)
+Config.debug_confidence_grid_path = 'sphere_confidence_probabilities/sphere_confidence_probs_64.pt'
+Config.freeze_debug_confidence = True
+Config.binary_occupancy = False  # Use smooth sigmoid occupancy
+Config.analytical_gradient = False  # Use analytical gradients for better accuracy
+
+# Training settings - fast testing
+Config.max_steps = 3000
+Config.lr_init = 0.02
+Config.lr_final = 0.002
+Config.lr_delay_steps = 500
+Config.batch_size = 4096
+Config.checkpoint_every = 1000
+
+# Model configuration - simplified for testing
+Model.raydist_fn = None
+Model.num_prop_samples = 32
+Model.num_nerf_samples = 16
+Model.num_levels = 2  # 1 proposal + 1 nerf level
+
+# MLP settings - disable density normals for speed
+PropMLP.disable_density_normals = True
+PropMLP.disable_rgb = True
+PropMLP.grid_level_dim = 1  # Not used with positional encoder
+
+NerfMLP.disable_density_normals = True
+NerfMLP.grid_level_dim = 1  # Not used with positional encoder
+
+# Loss configuration
+Config.data_loss_type = 'mse'  # Use MSE for cleaner gradients with analytical data
+Config.data_loss_mult = 1.0
+Config.hash_decay_mults = 0  # No hash grids, so no decay needed
+
+# Logging and evaluation
+Config.print_every = 100
+Config.train_render_every = 500
+Config.use_wandb = True
+Config.wandb_project = "zipnerf-positional-encoders"
+Config.wandb_name = "sphere_p_encoder_test_neg_64_cellsize_eqpot_2order"
+Config.wandb_tags = ['sphere', 'p_encoder', 'tensor_potential', 'analytical_dataset']
+Config.wandb_notes = 'Testing P_ENCODER (tensor potential G · ∇occupancy) on analytical sphere dataset' 

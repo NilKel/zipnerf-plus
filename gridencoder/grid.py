@@ -205,7 +205,8 @@ class PotentialEncoder(nn.Module):
                  per_level_scale=2, base_resolution=16,
                  log2_hashmap_size=19, desired_resolution=None,
                  gridtype='hash', align_corners=False,
-                 interpolation='linear', init_std=1e-4):
+                 interpolation='linear', init_std=1e-4,
+                 sphere_init=False, sphere_radius=1.0, sphere_center=None):
         super().__init__()
 
         self.input_dim = input_dim
@@ -213,6 +214,9 @@ class PotentialEncoder(nn.Module):
         self.level_dim = level_dim
         self.vector_dim = 3
         self.output_dim = self.num_levels * self.level_dim
+        self.sphere_init = sphere_init
+        self.sphere_radius = sphere_radius
+        self.sphere_center = sphere_center if sphere_center is not None else [0.0, 0.0, 0.0]
 
         common_kwargs = {
             'input_dim': input_dim,
@@ -231,6 +235,12 @@ class PotentialEncoder(nn.Module):
         self.encoder_x = GridEncoder(**common_kwargs)
         self.encoder_y = GridEncoder(**common_kwargs)
         self.encoder_z = GridEncoder(**common_kwargs)
+        
+        # Apply sphere-based initialization if requested
+        if self.sphere_init:
+            print("🌟 Sphere initialization temporarily disabled due to memory constraints")
+            print("   Using random initialization instead")
+            # self._initialize_with_sphere()  # Disabled for memory reasons
 
         # For compatibility
         self.n_params = self.encoder_x.n_params * 3
@@ -275,3 +285,114 @@ class PotentialEncoder(nn.Module):
         self.encoder_x.grad_total_variation(weight, inputs, bound, B)
         self.encoder_y.grad_total_variation(weight, inputs, bound, B)
         self.encoder_z.grad_total_variation(weight, inputs, bound, B)
+    
+    def _initialize_with_sphere(self):
+        """
+        Initialize the potential encoder embeddings based on sphere geometry.
+        This creates potential fields that are geometrically meaningful for the sphere.
+        """
+        print(f"🌟 Initializing PotentialEncoder with sphere geometry")
+        print(f"   Sphere radius: {self.sphere_radius}")
+        print(f"   Sphere center: {self.sphere_center}")
+        
+        sphere_center_tensor = torch.tensor(self.sphere_center, dtype=torch.float32)
+        
+        # Initialize embeddings for each level
+        for level in range(self.num_levels):
+            # Get resolution for this level
+            resolution = int(self.encoder_x.base_resolution * (self.encoder_x.per_level_scale ** level))
+            
+            # Create coordinate grid for this level
+            coords = torch.linspace(-1, 1, resolution)
+            if self.input_dim == 3:
+                Z, Y, X = torch.meshgrid(coords, coords, coords, indexing='ij')
+                grid_coords = torch.stack([X, Y, Z], dim=-1)  # (res, res, res, 3)
+            else:
+                raise NotImplementedError("Only 3D input supported for sphere initialization")
+            
+            # Compute sphere-based potential values
+            # Distance from sphere center
+            distances = torch.norm(grid_coords - sphere_center_tensor, dim=-1)
+            
+            # Different potential formulations for X, Y, Z components:
+            
+            # X component: radial potential (distance-based)
+            x_potential = self._compute_radial_potential(distances, level)
+            
+            # Y component: angular potential (based on angle from sphere center)
+            y_potential = self._compute_angular_potential(grid_coords, sphere_center_tensor, level)
+            
+            # Z component: height potential (based on Z coordinate relative to sphere)
+            z_potential = self._compute_height_potential(grid_coords, sphere_center_tensor, level)
+            
+            # Flatten potentials for this level
+            x_flat = x_potential.reshape(-1)
+            y_flat = y_potential.reshape(-1)  
+            z_flat = z_potential.reshape(-1)
+            
+            # Get indices for this level in the embeddings
+            start_idx = self.encoder_x.offsets[level].item()
+            end_idx = self.encoder_x.offsets[level + 1].item()
+            level_size = end_idx - start_idx
+            
+            # Sample or interpolate to match embedding size
+            if len(x_flat) >= level_size:
+                # Subsample if we have more values than needed
+                indices = torch.linspace(0, len(x_flat) - 1, level_size, dtype=torch.long)
+                x_values = x_flat[indices]
+                y_values = y_flat[indices]
+                z_values = z_flat[indices]
+            else:
+                # Interpolate if we need more values
+                x_values = torch.nn.functional.interpolate(
+                    x_flat.unsqueeze(0).unsqueeze(0), size=level_size, mode='linear', align_corners=True
+                ).squeeze()
+                y_values = torch.nn.functional.interpolate(
+                    y_flat.unsqueeze(0).unsqueeze(0), size=level_size, mode='linear', align_corners=True
+                ).squeeze()
+                z_values = torch.nn.functional.interpolate(
+                    z_flat.unsqueeze(0).unsqueeze(0), size=level_size, mode='linear', align_corners=True
+                ).squeeze()
+            
+            # Initialize embeddings for this level
+            with torch.no_grad():
+                for dim in range(self.level_dim):
+                    # Cycle through the potential components
+                    if dim % 3 == 0:
+                        values = x_values
+                    elif dim % 3 == 1:
+                        values = y_values
+                    else:
+                        values = z_values
+                    
+                    # Apply to the embeddings with some scaling
+                    scale = 0.1 / (level + 1)  # Smaller values for higher levels
+                    self.encoder_x.embeddings.data[start_idx:end_idx, dim] = values * scale
+                    self.encoder_y.embeddings.data[start_idx:end_idx, dim] = values * scale * 0.8
+                    self.encoder_z.embeddings.data[start_idx:end_idx, dim] = values * scale * 0.6
+        
+        print(f"   ✅ Initialized {self.num_levels} levels with sphere-based potentials")
+    
+    def _compute_radial_potential(self, distances, level):
+        """Compute radial potential based on distance from sphere center."""
+        # Potential decreases with distance from sphere surface
+        surface_distance = torch.abs(distances - self.sphere_radius)
+        potential = torch.exp(-surface_distance * (level + 1))
+        return potential
+    
+    def _compute_angular_potential(self, coords, sphere_center, level):
+        """Compute angular potential based on angular position."""
+        # Vector from sphere center to each point
+        vectors = coords - sphere_center
+        # Angular component (normalized)
+        angles = torch.atan2(vectors[..., 1], vectors[..., 0])  # XY plane angle
+        potential = torch.sin(angles * (level + 1)) * 0.5
+        return potential
+    
+    def _compute_height_potential(self, coords, sphere_center, level):
+        """Compute height-based potential."""
+        # Height relative to sphere center
+        height = coords[..., 2] - sphere_center[2]
+        # Height-based potential
+        potential = torch.tanh(height * (level + 1)) * 0.5
+        return potential

@@ -1,0 +1,63 @@
+# Sphere F_ENCODER Test Configuration 
+# Testing classic positional encoding (F * occupancy) on analytical sphere dataset
+
+# Base configuration
+include 'configs/blender.gin'
+
+# Dataset configuration
+Config.data_dir = "../data/nerf_synthetic/sphere_analytical"
+
+# Core model settings
+Config.use_potential = False  # F_ENCODER mode
+Config.use_triplane = False
+Config.binary_occupancy = False
+Config.analytical_gradient = True
+
+# Sampling configuration - simplified for testing
+Model.num_prop_samples = 16  # Reduced for faster testing
+Model.num_nerf_samples = 16  # Reduced for faster testing  
+Model.num_levels = 2  # 1 proposal + 1 nerf level
+
+# Confidence field settings
+Config.debug_confidence_grid_path = "sphere_confidence_probabilities/sphere_confidence_probs_128.pt"
+Config.freeze_debug_confidence = True  # Freeze confidence grid
+
+# Positional encoder settings - Use positional encoder instead of grid encoder
+NerfMLP.use_positional_encoder = True
+NerfMLP.pos_enc_num_freqs = 10  # Number of frequency bands
+NerfMLP.pos_enc_log_sampling = True  # Use log sampling
+
+PropMLP.use_positional_encoder = True
+PropMLP.pos_enc_num_freqs = 10
+PropMLP.pos_enc_log_sampling = True
+
+# Feature MLP settings (automatically enabled for positional encoders)
+NerfMLP.feature_mlp_hidden_dim = 64
+NerfMLP.feature_mlp_num_layers = 2
+PropMLP.feature_mlp_hidden_dim = 64
+PropMLP.feature_mlp_num_layers = 2
+
+# MLP settings - disable some features for simpler testing
+PropMLP.disable_density_normals = True
+PropMLP.disable_rgb = True
+NerfMLP.disable_density_normals = True
+
+# Training settings
+Config.max_steps = 3000
+Config.batch_size = 4096
+Config.lr_init = 0.02
+Config.lr_final = 0.002
+Config.lr_delay_steps = 500
+Config.data_loss_type = 'mse'
+
+# Wandb logging
+Config.use_wandb = True  # Disable wandb for faster experimentation
+Config.wandb_project = "my-nerf-experiments"
+Config.wandb_name = "sphere_f_encoder_test"
+Config.wandb_tags = ["sphere", "f_encoder", "positional_encoding", "analytical_dataset"]
+Config.wandb_notes = "Testing F_ENCODER (classic positional encoding F * occupancy) on analytical sphere dataset"
+
+# Training monitoring
+Config.print_every = 100
+Config.train_render_every = 500
+Config.checkpoint_every = 1000 

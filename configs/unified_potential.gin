@@ -1,0 +1,66 @@
+# Unified Potential Field Configuration
+# All settings in one place for easy training
+
+# Base settings from blender.gin
+Config.dataset_loader = 'blender'
+Config.near = 2.0
+Config.far = 6.0
+Config.factor = 4
+Config.hash_decay_mults = 10
+Config.use_tiffs = False
+Config.eval_only_once = False
+Config.eval_quantize_metrics = True
+Config.eval_crop_borders = 8
+Config.eval_raw_affine_cc = False
+
+# Model configuration
+Model.raydist_fn = None
+PropMLP.disable_density_normals = True
+PropMLP.disable_rgb = True
+PropMLP.grid_level_dim = 1
+NerfMLP.disable_density_normals = True
+
+# Potential field settings
+Config.use_potential = True
+Config.use_triplane = False
+Config.binary_occupancy = True
+
+# Training settings
+Config.max_steps = 25000
+Config.batch_size = 4096
+Config.lr_init = 0.01
+Config.lr_final = 0.001
+Config.lr_delay_steps = 5000
+
+# Checkpoint settings
+Config.checkpoint_every = 5000
+Config.checkpoints_total_limit = 1  # Only keep one checkpoint to save space
+Config.resume_from_checkpoint = True
+
+# Confidence field settings
+Config.confidence_grid_resolution = (256, 256, 256)
+Config.confidence_reg_mult = 0.0
+Config.confidence_lr_init = 0.05     # 5x higher than main model
+Config.confidence_lr_final = 0.005   # 5x higher than main model
+Config.freeze_debug_confidence = False
+
+# Debug confidence grid (will be set via command line)
+Config.debug_confidence_grid_path = "/home/nilkel/Projects/zipnerf-pytorch/confidence_grids_lego/confidence_grid_256.pt"
+
+# Logging settings
+Config.print_every = 100
+Config.train_render_every = 500
+
+# Wandb settings
+Config.use_wandb = True
+Config.wandb_project = "zipnerf-potential"
+
+# Data loss
+Config.data_loss_type = 'charb'
+Config.data_loss_mult = 1.0
+
+# Default experiment name (will be overridden)
+Config.exp_name = 'potential_experiment'
+
+# Default data directory (will be overridden)
+Config.data_dir = "/home/nilkel/Projects/data/nerf_synthetic/lego" 

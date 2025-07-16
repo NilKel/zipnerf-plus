@@ -1,0 +1,33 @@
+{
+    "dataset_type": "analytical_sphere_grids",
+    "sphere_radius": 1.0,
+    "sphere_center": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "bbox_size": 2.0,
+    "resolution": [
+        128,
+        128,
+        128
+    ],
+    "coordinate_system": "right_handed_z_up",
+    "grid_range": [
+        -2.0,
+        2.0
+    ],
+    "occupancy_grid_file": "analytical_occupancy_grid_128.pt",
+    "gradient_grid_file": "analytical_gradient_grid_128.pt",
+    "occupancy_statistics": {
+        "total_voxels": 2097152,
+        "inside_voxels": 134016,
+        "outside_voxels": 1963136,
+        "fill_ratio": 0.06390380859375
+    },
+    "gradient_statistics": {
+        "magnitude_min": 0.9999996423721313,
+        "magnitude_max": 1.0000001192092896,
+        "magnitude_mean": 1.0
+    }
+}

@@ -187,6 +187,16 @@ def compute_alpha_weights(density, tdist, dirs, opaque_background=False):
     """Helper function for computing alpha compositing weights."""
     t_delta = tdist[..., 1:] - tdist[..., :-1]
     delta = t_delta * torch.norm(dirs[..., None, :], dim=-1)
+    
+    # Debug print for tensor shape mismatch
+    if density.shape != delta.shape:
+        print(f"❌ SHAPE MISMATCH in compute_alpha_weights:")
+        print(f"   density.shape: {density.shape}")
+        print(f"   delta.shape: {delta.shape}")
+        print(f"   tdist.shape: {tdist.shape}")
+        print(f"   dirs.shape: {dirs.shape}")
+        print(f"   t_delta.shape: {t_delta.shape}")
+        
     density_delta = density * delta
 
     if opaque_background:

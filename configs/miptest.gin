@@ -1,0 +1,85 @@
+# Blender Dataset P_ENCODER Testing Configuration  
+# This config tests the potential grid method on the blender lego dataset
+# with positional encoding disabled and unfrozen confidence training
+
+# Base configuration
+Config.comment = 'lowbatch_64conf_4thord'
+Config.exp_name = 'test'
+Config.dataset_loader = 'llff'
+# Config.data_dir - uses default blender dataset path
+
+# Camera and scene settings
+Config.near = 0.2
+Config.far = 1e6 
+Config.factor = 4  # Downsample to 200x200 for faster testing
+Config.use_tiffs = False
+Config.eval_only_once = False
+Config.eval_quantize_metrics = True
+Config.eval_crop_borders = 8
+
+# POTENTIAL GRID CONFIGURATION
+# Disable positional encoder, use grid encoder with potential method
+
+# Disable positional encoder for both NerfMLP and PropMLP
+NerfMLP.use_positional_encoder = False
+NerfMLP.pos_enc_num_freqs = 10
+NerfMLP.pos_enc_log_sampling = True
+NerfMLP.feature_mlp_hidden_dim = 64
+NerfMLP.feature_mlp_num_layers = 2
+
+PropMLP.use_positional_encoder = False
+PropMLP.pos_enc_num_freqs = 10
+PropMLP.pos_enc_log_sampling = True
+PropMLP.feature_mlp_hidden_dim = 64
+PropMLP.feature_mlp_num_layers = 2
+
+# Confidence field configuration (required for potential grid method)
+Config.use_potential = False  # Use tensor potential encoding G · ∇occupancy
+Config.confidence_grid_resolution = (64, 64, 64)
+Config.confidence_reg_mult = 0.0
+
+# No confidence grid loading - train from scratch
+# Config.debug_confidence_grid_path = ''  # Disabled
+Config.freeze_debug_confidence = False  # Unfreeze confidence training
+Config.binary_occupancy = False  # Use smooth sigmoid occupancy
+Config.analytical_gradient = False  # Use analytical gradients for better accuracy
+
+# Training settings - fast testing
+Config.max_steps = 25000
+Config.lr_init = 0.02
+Config.lr_final = 0.002
+Config.lr_delay_steps = 500
+Config.batch_size = 4096
+Config.checkpoint_every = 1000
+
+# Model configuration - simplified for testing
+Model.raydist_fn = 'power_transformation'
+Model.opaque_background = True
+
+# MLP settings - disable density normals for speed
+PropMLP.disable_density_normals = True
+PropMLP.disable_rgb = True
+PropMLP.grid_level_dim = 1
+
+NerfMLP.disable_density_normals = True
+NerfMLP.grid_level_dim = 4  # Grid encoder level dimension
+
+# Hash grid settings
+Config.hash_decay_mults = 10
+Config.use_triplane = False  # Enable triplane blending with hashgrid
+
+# Loss configuration
+Config.data_loss_type = 'mse'  # Use MSE for cleaner gradients
+Config.data_loss_mult = 1.0
+
+# Default data configuration - can be overridden
+Config.data_dir = "/home/nilkel/Projects/data/mip_360/bicycle"
+
+# Logging and evaluation
+Config.print_every = 100
+Config.train_render_every = 500
+Config.use_wandb = True
+Config.wandb_project = "mip360exps"
+Config.wandb_tags = ['mip', 'potential_grid', 'grid_encoder', 'bicycle']
+Config.wandb_notes = 'Testing potential grid method with grid encoders on blender lego dataset'
+

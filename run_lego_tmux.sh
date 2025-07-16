@@ -14,13 +14,20 @@ tmux kill-session -t "$SESSION_NAME" 2>/dev/null || true
 # Create new tmux session and run training
 tmux new-session -d -s "$SESSION_NAME" -c "/home/nilkel/Projects/zipnerf-pytorch" bash -c "
     echo '🔧 Activating conda environment...';
+    source ~/miniconda3/etc/profile.d/conda.sh;
     conda activate zipnerf2;
+    echo 'Environment activated: '\$(conda info --show-active-env);
+    echo 'Python path: '\$(which python);
+    echo 'PyTorch CUDA: '\$(python -c 'import torch; print(torch.cuda.is_available())');
     
     echo '🚀 Starting ZipNeRF training for lego scene...';
     echo '📁 Data: $DATA_DIR';
     echo '🏷️  Experiment: $EXP_NAME';
     echo '📊 Wandb project: $WANDB_PROJECT';
     echo '';
+    
+    set -e;  # Exit on any error
+    trap 'echo \"❌ Training failed at step: \$LINENO\"' ERR;
     
     accelerate launch train.py \\
         --gin_configs=configs/blender.gin \\
@@ -31,7 +38,7 @@ tmux new-session -d -s "$SESSION_NAME" -c "/home/nilkel/Projects/zipnerf-pytorch
         --gin_bindings=\"Config.batch_size = 65536\" \\
         --gin_bindings=\"Config.factor = 4\" \\
         --gin_bindings=\"Config.use_wandb = True\" \\
-        --gin_bindings=\"Config.use_triplane = True\";
+        --gin_bindings=\"Config.use_triplane = True\" 2>&1 | tee training_output.log;
     
     echo '✅ Training completed! Press any key to exit...';
     read -n 1;

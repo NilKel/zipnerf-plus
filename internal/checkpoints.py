@@ -30,9 +30,17 @@ def save_checkpoint(save_dir,
                     accelerator: accelerate.Accelerator,
                     step=0,
                     total_limit=3):
+    # Save the new checkpoint first
+    new_checkpoint_path = os.path.join(save_dir, f"{step:06d}")
+    accelerator.save_state(new_checkpoint_path)
+    
+    # Then clean up old checkpoints, ensuring we don't delete the one we just saved
     if total_limit > 0:
         folders = glob.glob(os.path.join(save_dir, "*"))
         folders.sort()
-        for folder in folders[: len(folders) + 1 - total_limit]:
-            shutil.rmtree(folder)
-    accelerator.save_state(os.path.join(save_dir, f"{step:06d}"))
+        # Only delete if we have more than the limit
+        if len(folders) > total_limit:
+            for folder in folders[: len(folders) - total_limit]:
+                # Double-check we're not deleting the checkpoint we just saved
+                if folder != new_checkpoint_path:
+                    shutil.rmtree(folder)

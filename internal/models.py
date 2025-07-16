@@ -18,6 +18,7 @@ from tqdm import tqdm
 from gridencoder import GridEncoder, PotentialEncoder
 from internal.tri_mip import TriMipEncoding, PotentialTriMipEncoding
 from internal.field import ConfidenceField
+from posencoder import PositionalEncoder
 try:
     from torch_scatter import segment_coo
 except:
@@ -29,6 +30,67 @@ gin.config.external_configurable(math.safe_exp, module='math')
 def set_kwargs(self, kwargs):
     for k, v in kwargs.items():
         setattr(self, k, v)
+
+
+class DivergenceMLP(nn.Module):
+    """A simple MLP that predicts divergence from flattened feature vectors."""
+    
+    def __init__(self, input_dim, hidden_dim=128, num_layers=2, output_dim=None):
+        """
+        Initialize the divergence MLP.
+        
+        Args:
+            input_dim: Input dimension (D * 3 where D is level_dim)
+            hidden_dim: Hidden layer dimension
+            num_layers: Number of hidden layers
+            output_dim: Output dimension (D, defaults to input_dim // 3)
+        """
+        super().__init__()
+        
+        if output_dim is None:
+            output_dim = input_dim // 3
+        
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        
+        # Build the network
+        layers = []
+        
+        # Input layer
+        layers.append(nn.Linear(input_dim, hidden_dim))
+        layers.append(nn.ReLU())
+        
+        # Hidden layers
+        for _ in range(num_layers - 1):
+            layers.append(nn.Linear(hidden_dim, hidden_dim))
+            layers.append(nn.ReLU())
+        
+        # Output layer
+        layers.append(nn.Linear(hidden_dim, output_dim))
+        
+        self.network = nn.Sequential(*layers)
+        
+        # Initialize weights
+        self._init_weights()
+    
+    def _init_weights(self):
+        """Initialize network weights."""
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                torch.nn.init.xavier_uniform_(m.weight)
+                torch.nn.init.zeros_(m.bias)
+    
+    def forward(self, x):
+        """
+        Forward pass.
+        
+        Args:
+            x: Input tensor of shape (..., D*3)
+            
+        Returns:
+            Predicted divergence of shape (..., D)
+        """
+        return self.network(x)
 
 
 @gin.configurable
@@ -65,14 +127,38 @@ class Model(nn.Module):
         set_kwargs(self, kwargs)
         self.config = config
 
-        if self.config.use_potential:
+        # Initialize confidence field for potential encoders or positional encoders
+        # This is needed because positional encoders require confidence field for occupancy
+        needs_confidence_field = self.config.use_potential
+        
+        # Check if positional encoders will be used (before MLPs are created)
+        # We need to explicitly check gin config state since MLPs aren't created yet
+        try:
+            import gin
+            # Check if NerfMLP or PropMLP are configured to use positional encoders
+            nerf_mlp_config = gin.get_bindings('NerfMLP')
+            prop_mlp_config = gin.get_bindings('PropMLP')
+            uses_positional = (
+                nerf_mlp_config.get('use_positional_encoder', False) or
+                prop_mlp_config.get('use_positional_encoder', False)
+            )
+            needs_confidence_field = needs_confidence_field or uses_positional
+        except:
+            # If gin inspection fails, check if debug_confidence_grid_path is set
+            # as a fallback indicator that confidence field is needed
+            needs_confidence_field = needs_confidence_field or bool(getattr(config, 'debug_confidence_grid_path', None))
+        
+        if needs_confidence_field:
             self.confidence_field = ConfidenceField(
                 resolution=self.config.confidence_grid_resolution, 
                 device='cuda' if not self.config.dpcpp_backend else 'xpu',
                 pretrained_grid_path=self.config.debug_confidence_grid_path,
                 freeze_pretrained=self.config.freeze_debug_confidence,
-                binary_occupancy=self.config.binary_occupancy
+                binary_occupancy=self.config.binary_occupancy,
+                analytical_gradient=self.config.analytical_gradient
             )
+        else:
+            self.confidence_field = None
 
         from extensions import Backend
         Backend.set_backend('dpcpp' if self.config.dpcpp_backend else 'cuda')
@@ -113,6 +199,21 @@ class Model(nn.Module):
             nn.Linear(self.tri_mip_encoding.dim_out, self.nerf_mlp.encoder.output_dim),
             nn.ReLU()
         )
+        
+        # Add divergence MLP for regularization if enabled
+        # Note: divergence regularization is only applicable to grid encoders, not positional encoders
+        if (config.use_divergence_regularization and config.use_potential and 
+            not getattr(self.nerf_mlp, 'use_positional_encoder', False)):
+            # Input dimension is level_dim * 3 (for x, y, z components)
+            div_input_dim = self.nerf_mlp.encoder.level_dim * 3
+            self.div_mlp = DivergenceMLP(
+                input_dim=div_input_dim,
+                hidden_dim=config.div_mlp_hidden_dim,
+                num_layers=config.div_mlp_num_layers,
+                output_dim=self.nerf_mlp.encoder.level_dim
+            )
+        else:
+            self.div_mlp = None
 
     def forward(
             self,
@@ -135,7 +236,8 @@ class Model(nn.Module):
     Returns:
       ret: list, [*(rgb, distance, acc)]
     """
-        if self.config.use_potential:
+        if self.config.use_potential and not self.config.analytical_gradient:
+            # Only pre-compute gradients for stencil-based approach
             self.confidence_field.compute_gradient()
 
         device = batch['origins'].device
@@ -251,6 +353,11 @@ class Model(nn.Module):
             # Push our Gaussians through one of our two MLPs.
             mlp = (self.get_submodule(
                 f'prop_mlp_{i_level}') if self.distinct_prop else self.prop_mlp) if is_prop else self.nerf_mlp
+            # Pass confidence field to MLPs that need it (potential encoders or positional encoders)
+            mlp_needs_confidence = (
+                self.config.use_potential or 
+                getattr(mlp, 'use_positional_encoder', False)
+            )
             ray_results = mlp(
                 rand,
                 means, stds,
@@ -258,7 +365,7 @@ class Model(nn.Module):
                 imageplane=batch.get('imageplane'),
                 glo_vec=None if is_prop else glo_vec,
                 exposure=batch.get('exposure_values'),
-                confidence_field=self.confidence_field if self.config.use_potential else None,
+                confidence_field=self.confidence_field if mlp_needs_confidence else None,
                 training_step=training_step,
             )
             if self.config.gradient_scaling:
@@ -343,6 +450,9 @@ class Model(nn.Module):
                             ).mean()
                             total_loss += loss
                     ray_results['loss_hash_decay'] = total_loss / 3
+                elif isinstance(mlp.encoder, PositionalEncoder):
+                    # Positional encoders don't have hash embeddings, so no hash decay loss
+                    ray_results['loss_hash_decay'] = torch.tensor(0.0, device=means.device)
                 else:
                     idx = mlp.encoder.idx
                     param = mlp.encoder.embeddings
@@ -375,6 +485,175 @@ class Model(nn.Module):
                 renderings[i]['ray_rgbs'] = avg_rgbs[i]
 
         return renderings, ray_history
+
+    def densify_grid(self, mlp, bound=1):
+        """
+        Densify the G-Grid by evaluating it at a dense set of points.
+        
+        Args:
+            mlp: The MLP containing the encoder to densify
+            bound: The bound for the grid coordinates
+            
+        Returns:
+            G_dense: Dense grid of shape (D, H, W, num_levels, level_dim, 3)
+        """
+        if not hasattr(mlp.encoder, 'level_dim'):
+            raise ValueError("MLP encoder must have level_dim attribute for divergence regularization")
+        
+        # Get grid resolution from confidence field
+        D, H, W = self.confidence_field.resolution
+        
+        # Create dense coordinate grid
+        z_coords = torch.linspace(-bound, bound, D, device=self.confidence_field.c_grid.device)
+        y_coords = torch.linspace(-bound, bound, H, device=self.confidence_field.c_grid.device)
+        x_coords = torch.linspace(-bound, bound, W, device=self.confidence_field.c_grid.device)
+        
+        # Create meshgrid
+        zz, yy, xx = torch.meshgrid(z_coords, y_coords, x_coords, indexing='ij')
+        grid_coords = torch.stack([zz, yy, xx], dim=-1)  # (D, H, W, 3)
+        
+        # Flatten for encoder
+        grid_coords_flat = grid_coords.view(-1, 3)  # (D*H*W, 3)
+        
+        # Evaluate encoder at dense grid
+        if self.config.use_potential:
+            # For potential encoder, get features and reshape
+            features_flat = mlp.encoder(grid_coords_flat, bound=bound)  # (D*H*W, num_levels * level_dim * 3)
+            features_reshaped = features_flat.view(D, H, W, mlp.encoder.num_levels, mlp.encoder.level_dim, 3)
+            return features_reshaped
+        else:
+            raise ValueError("Divergence regularization requires potential encoder")
+
+    def compute_numerical_divergence(self, G_dense):
+        """
+        Compute numerical divergence using finite differences.
+        
+        Args:
+            G_dense: Dense grid of shape (D, H, W, num_levels, level_dim, 3)
+            
+        Returns:
+            div_grid: Divergence grid of shape (D, H, W, num_levels, level_dim)
+        """
+        D, H, W, num_levels, level_dim, _ = G_dense.shape
+        
+        # Extract components
+        G_x = G_dense[..., 0]  # (D, H, W, num_levels, level_dim)
+        G_y = G_dense[..., 1]  # (D, H, W, num_levels, level_dim)
+        G_z = G_dense[..., 2]  # (D, H, W, num_levels, level_dim)
+        
+        # Compute gradients using central differences
+        # For boundaries, use forward/backward differences
+        
+        # d(G_x)/dx
+        dGx_dx = torch.zeros_like(G_x)
+        dGx_dx[:, :, 1:-1] = (G_x[:, :, 2:] - G_x[:, :, :-2]) / 2.0
+        dGx_dx[:, :, 0] = G_x[:, :, 1] - G_x[:, :, 0]
+        dGx_dx[:, :, -1] = G_x[:, :, -1] - G_x[:, :, -2]
+        
+        # d(G_y)/dy
+        dGy_dy = torch.zeros_like(G_y)
+        dGy_dy[:, 1:-1, :] = (G_y[:, 2:, :] - G_y[:, :-2, :]) / 2.0
+        dGy_dy[:, 0, :] = G_y[:, 1, :] - G_y[:, 0, :]
+        dGy_dy[:, -1, :] = G_y[:, -1, :] - G_y[:, -2, :]
+        
+        # d(G_z)/dz
+        dGz_dz = torch.zeros_like(G_z)
+        dGz_dz[1:-1, :, :] = (G_z[2:, :, :] - G_z[:-2, :, :]) / 2.0
+        dGz_dz[0, :, :] = G_z[1, :, :] - G_z[0, :, :]
+        dGz_dz[-1, :, :] = G_z[-1, :, :] - G_z[-2, :, :]
+        
+        # Compute divergence
+        div_grid = dGx_dx + dGy_dy + dGz_dz
+        
+        return div_grid
+
+    def compute_grid_divergence_loss(self, mlp):
+        """
+        Compute the grid-level divergence loss (L_grid).
+        
+        Args:
+            mlp: The MLP to compute divergence loss for
+            
+        Returns:
+            loss: Grid divergence loss
+        """
+        if self.div_mlp is None:
+            return torch.tensor(0.0, device=next(self.parameters()).device)
+        
+        # Densify the grid
+        G_dense = self.densify_grid(mlp)  # (D, H, W, num_levels, level_dim, 3)
+        
+        # Compute numerical divergence
+        div_stencil_grid = self.compute_numerical_divergence(G_dense)  # (D, H, W, num_levels, level_dim)
+        
+        # Flatten G_dense for MLP input
+        D, H, W, num_levels, level_dim, _ = G_dense.shape
+        G_flat = G_dense.view(-1, num_levels, level_dim, 3)  # (D*H*W, num_levels, level_dim, 3)
+        
+        # Process each level separately
+        total_loss = 0.0
+        for level in range(num_levels):
+            # Get features for this level
+            G_level = G_flat[:, level, :, :].flatten(-2)  # (D*H*W, level_dim * 3)
+            
+            # Predict divergence
+            div_pred_level = self.div_mlp(G_level)  # (D*H*W, level_dim)
+            
+            # Reshape back to grid
+            div_pred_grid_level = div_pred_level.view(D, H, W, level_dim)  # (D, H, W, level_dim)
+            
+            # Get target divergence for this level
+            div_target_level = div_stencil_grid[:, :, :, level, :]  # (D, H, W, level_dim)
+            
+            # Compute MSE loss with stop gradient on target
+            loss_level = F.mse_loss(div_pred_grid_level, div_target_level.detach())
+            total_loss += loss_level
+        
+        return total_loss / num_levels
+
+    def compute_ray_divergence_regularization(self, G_features):
+        """
+        Compute the ray-level divergence regularization (part of L_ray).
+        
+        Args:
+            G_features: Vector potential features of shape (..., num_levels, level_dim, 3)
+            
+        Returns:
+            reg_loss: Regularization loss
+        """
+        if self.div_mlp is None:
+            return torch.tensor(0.0, device=G_features.device)
+        
+        # Flatten features for MLP input
+        original_shape = G_features.shape[:-3]  # Everything except (num_levels, level_dim, 3)
+        num_levels = G_features.shape[-3]
+        level_dim = G_features.shape[-2]
+        
+        G_flat = G_features.view(-1, num_levels, level_dim, 3)  # (N, num_levels, level_dim, 3)
+        
+        total_reg = 0.0
+        for level in range(num_levels):
+            # Get features for this level
+            G_level = G_flat[:, level, :, :].flatten(-2)  # (N, level_dim * 3)
+            
+            # Predict divergence
+            div_pred = self.div_mlp(G_level)  # (N, level_dim)
+            
+            # Compute regularization: encourage low divergence
+            reg_level = torch.mean(div_pred ** 2)
+            total_reg += reg_level
+        
+        return total_reg / num_levels
+
+    def clear_divergence_cache(self):
+        """Clear cached divergence features for inference."""
+        if hasattr(self.nerf_mlp, '_stored_g_features'):
+            del self.nerf_mlp._stored_g_features
+        for i in range(self.num_levels - 1):
+            if hasattr(self, f'prop_mlp_{i}'):
+                prop_mlp = getattr(self, f'prop_mlp_{i}')
+                if hasattr(prop_mlp, '_stored_g_features'):
+                    del prop_mlp._stored_g_features
 
 
 class MLP(nn.Module):
@@ -415,6 +694,11 @@ class MLP(nn.Module):
     net_width_glo: int = 128  # The width of the second part of MLP.
     net_depth_glo: int = 2  # The width of the second part of MLP.
     use_potential: bool = False # If true, use potential encoder
+    use_positional_encoder: bool = False  # If true, use positional encoder instead of grid encoder
+    pos_enc_num_freqs: int = 10  # Number of frequency bands for positional encoder
+    pos_enc_log_sampling: bool = True  # Use log sampling for positional encoder frequencies
+    feature_mlp_hidden_dim: int = 64  # Hidden dimension for feature MLP
+    feature_mlp_num_layers: int = 2  # Number of layers in feature MLP
 
     def __init__(self, config=None, **kwargs):
         super().__init__()
@@ -439,19 +723,81 @@ class MLP(nn.Module):
 
             self.dir_enc_fn = dir_enc_fn
             dim_dir_enc = self.dir_enc_fn(torch.zeros(1, 3), None).shape[-1]
-        self.grid_num_levels = int(
-            np.log(self.grid_disired_resolution / self.grid_base_resolution) / np.log(self.grid_level_interval)) + 1
+        # Choose between grid encoder and positional encoder
+        use_positional_encoder = getattr(self, 'use_positional_encoder', False)
         
-        use_potential = config is not None and getattr(config, 'use_potential', False)
-        Encoder = PotentialEncoder if use_potential else GridEncoder
-        self.encoder = Encoder(input_dim=3,
-                                num_levels=self.grid_num_levels,
-                                level_dim=self.grid_level_dim,
-                                base_resolution=self.grid_base_resolution,
-                                desired_resolution=self.grid_disired_resolution,
-                                log2_hashmap_size=self.grid_log2_hashmap_size,
-                                gridtype='hash',
-                                align_corners=False)
+        if use_positional_encoder:
+            # Use positional encoder
+            use_potential = config is not None and getattr(config, 'use_potential', False)
+            encoding_type = 'P_ENCODER' if use_potential else 'F_ENCODER'
+            
+            self.encoder = PositionalEncoder(
+                encoding_type=encoding_type,
+                num_dims=3,
+                num_freqs=self.pos_enc_num_freqs,
+                log_sampling=self.pos_enc_log_sampling
+            )
+            
+            # Set output dimension for positional encoder
+            if use_potential:
+                # P_ENCODER outputs [..., output_dim_F, 3]
+                self.encoder_output_dim = self.encoder.encoder.output_dim_F
+            else:
+                # F_ENCODER outputs [..., output_dim]
+                self.encoder_output_dim = self.encoder.encoder.output_dim
+        else:
+            # Use grid encoder (original logic)
+            self.grid_num_levels = int(
+                np.log(self.grid_disired_resolution / self.grid_base_resolution) / np.log(self.grid_level_interval)) + 1
+            
+            use_potential = config is not None and getattr(config, 'use_potential', False)
+            Encoder = PotentialEncoder if use_potential else GridEncoder
+            
+            # Prepare encoder arguments
+            encoder_kwargs = {
+                'input_dim': 3,
+                'num_levels': self.grid_num_levels,
+                'level_dim': self.grid_level_dim,
+                'per_level_scale': self.grid_level_interval,  # Add missing per_level_scale parameter
+                'base_resolution': self.grid_base_resolution,
+                'desired_resolution': self.grid_disired_resolution,
+                'log2_hashmap_size': self.grid_log2_hashmap_size,
+                'gridtype': 'hash',
+                'align_corners': False,
+            }
+            
+            # Add sphere initialization parameters if this is a sphere experiment
+            if use_potential and config is not None and getattr(config, 'sphere_experiment', False):
+                encoder_kwargs.update({
+                    'sphere_init': True,
+                    'sphere_radius': getattr(config, 'sphere_radius', 1.0),
+                    'sphere_center': getattr(config, 'sphere_center', [0.0, 0.0, 0.0]),
+                })
+            
+            self.encoder = Encoder(**encoder_kwargs)
+            self.encoder_output_dim = self.encoder.output_dim
+        
+        # Add feature MLP - required when using positional encoders
+        if use_positional_encoder:
+            layers = []
+            input_dim = self.encoder_output_dim
+            
+            # Hidden layers
+            for i in range(self.feature_mlp_num_layers):
+                layers.append(nn.Linear(input_dim, self.feature_mlp_hidden_dim))
+                layers.append(nn.ReLU())
+                input_dim = self.feature_mlp_hidden_dim
+            
+            # Output layer - convert to grid encoder compatible dimension
+            # This ensures density MLP gets same input dim regardless of encoder type
+            grid_output_dim = self.grid_num_levels * self.grid_level_dim
+            layers.append(nn.Linear(input_dim, grid_output_dim))
+            
+            self.feature_mlp = nn.Sequential(*layers)
+            # Update encoder_output_dim to match grid encoder for downstream compatibility
+            self.encoder_output_dim = grid_output_dim
+        else:
+            self.feature_mlp = None
         
         # Add triplane components
         TriplaneEncoder = PotentialTriMipEncoding if use_potential else TriMipEncoding
@@ -459,17 +805,25 @@ class MLP(nn.Module):
 
         projection_in_dim = self.tri_mip_encoding.dim_out
         if use_potential:
-            projection_out_dim = self.encoder.output_dim * 3
+            # For potential encoders, multiply by 3 for the vector potential dimension
+            if use_positional_encoder:
+                projection_out_dim = self.encoder_output_dim * 3
+            else:
+                projection_out_dim = self.encoder.output_dim * 3
         else:
-            projection_out_dim = self.encoder.output_dim
+            # For standard encoders
+            if use_positional_encoder:
+                projection_out_dim = self.encoder_output_dim
+            else:
+                projection_out_dim = self.encoder.output_dim
 
         self.tri_mip_projection = nn.Sequential(
             nn.Linear(projection_in_dim, projection_out_dim),
             nn.ReLU()
         )
         
-        last_dim = self.encoder.output_dim
-        if self.scale_featurization:
+        last_dim = self.encoder_output_dim
+        if self.scale_featurization and not use_positional_encoder:
             last_dim += self.encoder.num_levels
         self.density_layer = nn.Sequential(nn.Linear(last_dim, 64),
                                            nn.ReLU(),
@@ -518,7 +872,7 @@ class MLP(nn.Module):
                     last_dim_rgb += input_dim_rgb
             self.rgb_layer = nn.Linear(last_dim_rgb, self.num_rgb_channels)
 
-    def predict_density(self, means, stds, rand=False, no_warp=False, confidence_field=None, training_step=None):
+    def predict_density(self, means, stds, rand=False, no_warp=False, confidence_field=None, training_step=None, store_g_features=False):
         """Helper function to output density."""
         # Encode input positions
         if self.warp_fn is not None and not no_warp:
@@ -530,13 +884,61 @@ class MLP(nn.Module):
         
         # Check if triplane is enabled using stored config
         use_triplane = self.config is not None and getattr(self.config, 'use_triplane', False)
+        use_positional_encoder = getattr(self, 'use_positional_encoder', False)
         
-        # Move grid_sizes to the correct device and calculate weights once.
-        grid_sizes = self.encoder.grid_sizes.to(stds.device)
-        weights = torch.erf(1 / torch.sqrt(8 * stds[..., None] ** 2 * grid_sizes ** 2 + 1e-8))
+        if not use_positional_encoder:
+            # Move grid_sizes to the correct device and calculate weights once.
+            grid_sizes = self.encoder.grid_sizes.to(stds.device)
+            weights = torch.erf(1 / torch.sqrt(8 * stds[..., None] ** 2 * grid_sizes ** 2 + 1e-8))
 
-        if self.config is not None and getattr(self.config, 'use_potential', False):
-            # Path for potential field computation
+        if use_positional_encoder:
+            # Path for positional encoder
+            use_potential = self.config is not None and getattr(self.config, 'use_potential', False)
+            
+            if use_potential:
+                # P_ENCODER case: Get tensor potential and dot product with grad_occ
+                if confidence_field is None:
+                    raise ValueError("Confidence field must be provided when using potential with positional encoder.")
+                
+                # Get tensor potential G of shape [..., output_dim_F, 3]
+                G = self.encoder(means)
+                
+                # Store G_features for divergence regularization if requested
+                if store_g_features:
+                    self._stored_g_features = G.clone()
+                
+                # Get occupancy gradient
+                means_for_conf = means.view(-1, 3)
+                sampled_conf, sampled_grad = confidence_field.query(means_for_conf)
+                
+                # Reshape for broadcasting
+                sampled_grad = sampled_grad.view(*G.shape[:-2], 1, 3)  # [..., 1, 3]
+                
+                # Dot product: G · grad_occ
+                dot_product = -torch.sum(G * sampled_grad, dim=-1)  # [..., output_dim_F]
+                features = dot_product
+                
+            else:
+                # F_ENCODER case: Get positional features and multiply with occupancy
+                if confidence_field is None:
+                    raise ValueError("Confidence field must be provided when using positional encoder.")
+                
+                # Get positional features F of shape [..., output_dim]
+                F = self.encoder(means)
+                
+                # Get occupancy (sampled_conf is actually occupancy)
+                means_for_conf = means.view(-1, 3)
+                sampled_conf, _ = confidence_field.query(means_for_conf)
+                
+                # Reshape for broadcasting
+                sampled_conf = sampled_conf.view(*F.shape[:-1], 1)  # [..., 1]
+                
+                # Element-wise multiplication: F * occ
+                features = F * sampled_conf  # [..., output_dim]
+            features = features.mean(dim=-2)
+
+        elif self.config is not None and getattr(self.config, 'use_potential', False):
+            # Path for potential field computation (grid encoder)
             if confidence_field is None:
                 raise ValueError("Confidence field must be provided when using potential.")
 
@@ -546,6 +948,10 @@ class MLP(nn.Module):
             hash_features_per_level = potential_features_raw.view(
                 *potential_features_raw.shape[:-2], self.encoder.num_levels, self.encoder.level_dim, 3
             )
+            
+            # Store G_features for divergence regularization if requested
+            if store_g_features:
+                self._stored_g_features = hash_features_per_level.clone()
             
             # 2. Interpolate confidence and gradient
             # The `means` are already in [-1, 1] for the encoder, which is what query expects.
@@ -577,7 +983,7 @@ class MLP(nn.Module):
                 
             else:
                 blended_features_per_level = hash_features_per_level
-
+            
             # 4. Compute dot product and multiply by confidence/occupancy
             # Dot product between feature and occupancy gradient
             
@@ -585,10 +991,14 @@ class MLP(nn.Module):
             
             # Apply the appropriate formulation based on binary_occupancy flag
             if self.config.binary_occupancy:
-                # Binary occupancy formulation: binary_occ * (blended_features ⋅ gradient)
+                # Binary occupancy formulation: -binary_occ * (potential ⋅ occ_grad)
+                # where sampled_conf contains binary values (0 or 1) with threshold 0.001
+                # and sampled_grad is computed from binary occupancy
                 features = -sampled_conf.squeeze(-1) * dot_product
             else:
-                # Original smooth formulation: -confidence * (blended_features ⋅ gradient)  
+                # Smooth sigmoid formulation: -sigmoid(conf) * (potential ⋅ occ_grad)
+                # where sampled_conf contains continuous sigmoid values [0,1]
+                # and sampled_grad is computed from sigmoid confidence
                 features = -sampled_conf.squeeze(-1) * dot_product
 
             if not use_triplane:
@@ -627,7 +1037,11 @@ class MLP(nn.Module):
             features = self.encoder(means, bound=1).unflatten(-1, (self.encoder.num_levels, -1))
             features = (features * weights[..., None]).mean(dim=-3).flatten(-2, -1)
         
-        if self.scale_featurization:
+        # Apply feature MLP (required for positional encoders)
+        if self.feature_mlp is not None:
+            features = self.feature_mlp(features)
+        
+        if self.scale_featurization and not use_positional_encoder:
             with torch.no_grad():
                 vl2mean = segment_coo((self.encoder.embeddings ** 2).sum(-1),
                                       self.encoder.idx,
@@ -637,7 +1051,6 @@ class MLP(nn.Module):
                                       )
             featurized_w = (2 * weights.mean(dim=-2) - 1) * (self.encoder.init_std ** 2 + vl2mean).sqrt()
             features = torch.cat([features, featurized_w], dim=-1)
-        
         x = self.density_layer(features)
         
         raw_density = x[..., 0]  # Hardcoded to a single channel.
@@ -704,14 +1117,19 @@ class MLP(nn.Module):
       normals_pred: [..., 3], or None.
       roughness: [..., 1], or None.
     """
+        # Check if we should store G_features for divergence regularization
+        store_g_features = (self.config is not None and 
+                           getattr(self.config, 'use_divergence_regularization', False) and
+                           self.training)
+        
         if self.disable_density_normals:
-            raw_density, x, means_contract = self.predict_density(means, stds, rand=rand, no_warp=no_warp, confidence_field=confidence_field, training_step=training_step)
+            raw_density, x, means_contract = self.predict_density(means, stds, rand=rand, no_warp=no_warp, confidence_field=confidence_field, training_step=training_step, store_g_features=store_g_features)
             raw_grad_density = None
             normals = None
         else:
             with torch.enable_grad():
                 means.requires_grad_(True)
-                raw_density, x, means_contract = self.predict_density(means, stds, rand=rand, no_warp=no_warp, confidence_field=confidence_field, training_step=training_step)
+                raw_density, x, means_contract = self.predict_density(means, stds, rand=rand, no_warp=no_warp, confidence_field=confidence_field, training_step=training_step, store_g_features=store_g_features)
                 d_output = torch.ones_like(raw_density, requires_grad=False, device=raw_density.device)
                 raw_grad_density = torch.autograd.grad(
                     outputs=raw_density,
@@ -791,9 +1209,15 @@ class MLP(nn.Module):
                 else:
                     # Encode view directions.
                     dir_enc = self.dir_enc_fn(viewdirs, roughness)
-                    dir_enc = torch.broadcast_to(
-                        dir_enc[..., None, :],
-                        bottleneck.shape[:-1] + (dir_enc.shape[-1],))
+                    # Check if dir_enc already has the sample dimension
+                    if dir_enc.shape[:-1] == bottleneck.shape[:-1]:
+                        # Already has correct shape, no need to broadcast
+                        pass
+                    else:
+                        # Need to broadcast to match bottleneck shape
+                        dir_enc = torch.broadcast_to(
+                            dir_enc[..., None, :],
+                            bottleneck.shape[:-1] + (dir_enc.shape[-1],))
 
                 # Append view (or reflection) direction encoding to bottleneck vector.
                 x.append(dir_enc)
@@ -880,6 +1304,9 @@ def render_image(model,
     acc: rendered accumulated weights per pixel.
   """
     model.eval()
+
+    # Clear divergence cache for inference
+    accelerator.unwrap_model(model).clear_divergence_cache()
 
     height, width = batch['origins'].shape[:2]
     num_rays = height * width

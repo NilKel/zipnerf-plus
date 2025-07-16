@@ -81,6 +81,9 @@ def main(unused_argv):
         lr_fn_confidence = None
         use_separate_confidence_lr = False
 
+    # Create divergence optimizer if needed
+    div_optimizer = train_utils.create_divergence_optimizer(config, model)
+
     # load dataset
     dataset = datasets.load_dataset('train', config.data_dir, config)
     test_dataset = datasets.load_dataset('test', config.data_dir, config)
@@ -107,7 +110,10 @@ def main(unused_argv):
         postprocess_fn = lambda z, _=None: z
 
     # use accelerate to prepare.
-    model, dataloader, optimizer = accelerator.prepare(model, dataloader, optimizer)
+    if div_optimizer is not None:
+        model, dataloader, optimizer, div_optimizer = accelerator.prepare(model, dataloader, optimizer, div_optimizer)
+    else:
+        model, dataloader, optimizer = accelerator.prepare(model, dataloader, optimizer)
 
     if config.resume_from_checkpoint:
         init_step = checkpoints.restore_checkpoint(config.checkpoint_dir, accelerator, logger)
@@ -171,6 +177,12 @@ def main(unused_argv):
                 'use_potential': config.use_potential,
                 'confidence_grid_resolution': str(config.confidence_grid_resolution),
                 'confidence_reg_mult': config.confidence_reg_mult,
+                'use_divergence_regularization': config.use_divergence_regularization,
+                'divergence_reg_mult': config.divergence_reg_mult,
+                'grid_optim_every_k_iters': config.grid_optim_every_k_iters,
+                'div_mlp_hidden_dim': config.div_mlp_hidden_dim,
+                'div_mlp_num_layers': config.div_mlp_num_layers,
+                'div_mlp_lr': config.div_mlp_lr,
                 'num_prop_samples': module.num_prop_samples,
                 'num_nerf_samples': module.num_nerf_samples,
                 'num_levels': module.num_levels,
@@ -395,6 +407,30 @@ def main(unused_argv):
                     stats['confidence_active_05'] = (conf_sigmoid > 0.5).float().mean().item()
                     stats['confidence_active_09'] = (conf_sigmoid > 0.9).float().mean().item()
             
+            # Divergence regularization step
+            if (config.use_divergence_regularization and 
+                div_optimizer is not None and 
+                hasattr(module, 'div_mlp') and 
+                module.div_mlp is not None):
+                
+                # Grid-level optimization step (L_grid)
+                if step % config.grid_optim_every_k_iters == 0:
+                    with accelerator.autocast():
+                        # Compute grid divergence loss for nerf_mlp
+                        grid_div_loss = module.compute_grid_divergence_loss(module.nerf_mlp)
+                        stats['grid_div_loss'] = grid_div_loss.item()
+                    
+                    # Optimize divergence MLP
+                    div_optimizer.zero_grad()
+                    accelerator.backward(grid_div_loss)
+                    div_optimizer.step()
+                
+                # Ray-level divergence regularization (part of L_ray)
+                if hasattr(module.nerf_mlp, '_stored_g_features'):
+                    div_reg_loss = module.compute_ray_divergence_regularization(module.nerf_mlp._stored_g_features)
+                    losses['divergence_reg'] = config.divergence_reg_mult * div_reg_loss
+                    stats['div_reg_loss'] = div_reg_loss.item()
+            
             loss = sum(losses.values())
             stats['loss'] = loss.item()
             stats['losses'] = tree_map(lambda x: x.item(), losses)
@@ -505,6 +541,8 @@ def main(unused_argv):
                                 wandb_log[f'metrics/{k}'] = v
                             elif k.startswith('psnrs/'):
                                 wandb_log[f'metrics/{k}'] = v
+                            elif k in ['grid_div_loss', 'div_reg_loss']:
+                                wandb_log[f'divergence/{k}'] = v
                             else:
                                 wandb_log[f'training/{k}'] = v
                         
@@ -556,6 +594,9 @@ def main(unused_argv):
                     checkpoints.save_checkpoint(config.checkpoint_dir,
                                                 accelerator, step,
                                                 config.checkpoints_total_limit)
+
+            # REMOVED: Train rendering at step 2000 (ray batches vs full images issue)
+            # Will be fixed in a future version to properly handle train image rendering
 
             # Test-set evaluation.
             if config.train_render_every > 0 and step % config.train_render_every == 0:
@@ -696,6 +737,113 @@ def main(unused_argv):
         checkpoints.save_checkpoint(config.checkpoint_dir,
                                     accelerator, step,
                                     config.checkpoints_total_limit)
+    
+    # Add rendering functionality after training completion
+    if accelerator.is_main_process:
+        logger.info('Starting post-training rendering...')
+        
+        # Create render directory
+        render_dir = os.path.join(config.exp_path, 'renders')
+        utils.makedirs(render_dir)
+        
+        # Set model to eval mode for rendering
+        model.eval()
+        
+        # Render all test images at full resolution
+        logger.info('Rendering test images...')
+        test_metrics = []
+        test_render_dir = os.path.join(render_dir, 'test')
+        utils.makedirs(test_render_dir)
+        
+        for i in tqdm(range(len(test_dataset)), desc="Rendering test images"):
+            # Get a full image batch (not ray batch) for rendering
+            # This uses the dataset directly to get full images
+            test_sample = test_dataset[i]
+            
+            # Convert to proper batch format for render_image
+            test_batch = {}
+            for key, value in test_sample.items():
+                if value is not None:
+                    if isinstance(value, np.ndarray):
+                        test_batch[key] = torch.from_numpy(value).to(accelerator.device)
+                    else:
+                        test_batch[key] = value.to(accelerator.device) if hasattr(value, 'to') else value
+            
+            # Ensure proper image dimensions for rendering
+            if 'origins' in test_batch:
+                origins_shape = test_batch['origins'].shape
+                if len(origins_shape) == 2:  # Missing batch dimension
+                    for key in test_batch:
+                        if test_batch[key] is not None and hasattr(test_batch[key], 'unsqueeze'):
+                            test_batch[key] = test_batch[key].unsqueeze(0)
+            
+            # Render the image at full resolution (no downsampling)
+            original_render_chunk_size = config.render_chunk_size
+            config.render_chunk_size = min(config.render_chunk_size, 16384)  # Smaller chunks for safety
+            
+            try:
+                rendering = models.render_image(model, accelerator, test_batch, False, 1.0, config, verbose=False)
+                
+                # Convert to numpy and postprocess
+                rendering = tree_map(lambda x: x.detach().cpu().numpy(), rendering)
+                test_batch = tree_map(lambda x: x.detach().cpu().numpy() if x is not None else None, test_batch)
+                
+                # Ensure proper image shapes before saving
+                rendered_rgb = postprocess_fn(rendering['rgb'])
+                
+                # Check and fix dimensions if needed
+                if len(rendered_rgb.shape) == 4 and rendered_rgb.shape[0] == 1:
+                    rendered_rgb = rendered_rgb.squeeze(0)  # Remove batch dimension
+                
+                # Compute metrics for this image
+                if test_batch['rgb'] is not None:
+                    gt_rgb = postprocess_fn(test_batch['rgb'])
+                    if len(gt_rgb.shape) == 4 and gt_rgb.shape[0] == 1:
+                        gt_rgb = gt_rgb.squeeze(0)  # Remove batch dimension
+                    
+                    metric = metric_harness(rendered_rgb, gt_rgb)
+                    test_metrics.append(metric)
+                    
+                    # Save ground truth for comparison
+                    utils.save_img_u8(gt_rgb, os.path.join(test_render_dir, f'gt_{i:03d}.png'))
+                else:
+                    # No ground truth available
+                    test_metrics.append({'psnr': 0.0, 'ssim': 0.0, 'lpips': 0.0})
+                
+                # Save rendered image
+                utils.save_img_u8(rendered_rgb, os.path.join(test_render_dir, f'render_{i:03d}.png'))
+                
+                # Log progress every 10 images
+                if (i + 1) % 10 == 0:
+                    logger.info(f'Rendered {i + 1}/{len(test_dataset)} test images')
+                    
+            except Exception as e:
+                logger.error(f'Failed to render test image {i}: {e}')
+                # Create dummy metrics to continue
+                test_metrics.append({'psnr': 0.0, 'ssim': 0.0, 'lpips': 0.0})
+            
+            finally:
+                config.render_chunk_size = original_render_chunk_size
+        
+        # Compute and log final test metrics
+        if test_metrics:
+            avg_test_metrics = {}
+            for key in test_metrics[0].keys():
+                valid_metrics = [m[key] for m in test_metrics if m[key] > 0]
+                if valid_metrics:
+                    avg_test_metrics[key] = np.mean(valid_metrics)
+                    logger.info(f'Final test {key}: {avg_test_metrics[key]:.4f}')
+            
+            # Log to wandb if enabled
+            if config.use_wandb:
+                wandb_final_metrics = {f'final_test/{k}': v for k, v in avg_test_metrics.items()}
+                wandb_final_metrics['rendering/test_images_rendered'] = len([m for m in test_metrics if m['psnr'] > 0])
+                wandb.log(wandb_final_metrics, step=step)
+        
+        logger.info(f'Test rendering complete. Saved {len(test_dataset)} images to {test_render_dir}')
+        
+        # Set model back to training mode
+        model.train()
     
     # Clean up wandb
     if accelerator.is_main_process and config.use_wandb:

@@ -29,10 +29,24 @@ class Config:
     confidence_grid_resolution: Tuple[int, int, int] = (128, 128, 128)
     confidence_reg_mult: float = 0.0  # Multiplier for confidence field regularization loss
     binary_occupancy: bool = False  # If True, use binary occupancy with STE instead of smooth sigmoid
+    analytical_gradient: bool = False  # If True, use analytical gradient (autograd) instead of stencil-based finite differences
     
     # Debug/sanity check options for confidence field
     debug_confidence_grid_path: Optional[str] = None  # Path to pretrained confidence grid for debugging
-    freeze_debug_confidence: bool = True  # If True, freeze the debug confidence grid (no gradients)
+    freeze_debug_confidence: bool = False  # If True, freeze the debug confidence grid (no gradients)
+    
+    # Divergence regularization settings
+    use_divergence_regularization: bool = False  # If True, enable divergence regularization
+    divergence_reg_mult: float = 0.01  # Multiplier for divergence regularization loss
+    grid_optim_every_k_iters: int = 50  # Train div_mlp every k iterations
+    div_mlp_hidden_dim: int = 128  # Hidden dimension for divergence MLP
+    div_mlp_num_layers: int = 2  # Number of hidden layers in divergence MLP
+    div_mlp_lr: float = 0.001  # Learning rate for divergence MLP optimizer
+    
+    # Sphere experiment settings
+    sphere_experiment: bool = False  # If True, enable sphere-based initialization
+    sphere_radius: float = 1.0  # Radius of the sphere for initialization
+    sphere_center: List[float] = dataclasses.field(default_factory=lambda: [0.0, 0.0, 0.0])  # Center of sphere
     seed = 0
     dataset_loader: str = 'llff'  # The type of dataset loader to use.
     batching: str = 'all_images'  # Batch composition, [single_image, all_images].

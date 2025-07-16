@@ -1,0 +1,49 @@
+# Sphere Experiment Configuration - Simplified
+# Uses standard hash grid encoder without analytical sphere initialization
+
+# Base dataset configuration (blender format)
+Config.exp_name = 'sphere_test'
+Config.dataset_loader = 'blender'
+Config.near = 2.0
+Config.far = 6.0
+Config.factor = 1  # Use full resolution
+Config.use_tiffs = False
+Config.eval_only_once = False
+Config.eval_quantize_metrics = True
+Config.eval_crop_borders = 8
+
+# Disable sphere experiment for now (too memory intensive)
+Config.sphere_experiment = False
+Config.sphere_radius = 1.0
+Config.sphere_center = [0.0, 0.0, 0.0]
+
+# Enable potential encoder with confidence grids but no sphere init
+Config.use_potential = True
+Config.use_triplane = True
+Config.binary_occupancy = False  # Set to True for binary occupancy (threshold 0.001), False for smooth sigmoid
+Config.analytical_gradient = False  # Set to True for analytical gradient (autograd), False for stencil-based finite differences
+Config.confidence_grid_resolution = (64, 64, 64)
+Config.confidence_reg_mult = 0.0
+Config.debug_confidence_grid_path = 'sphere_confidence_grids/sphere_confidence_grid_64.pt'
+Config.freeze_debug_confidence = True
+
+# Training settings - reduced for faster convergence
+Config.max_steps = 5000
+Config.lr_init = 0.01
+Config.lr_final = 0.001
+Config.lr_delay_steps = 1000
+Config.batch_size = 2048
+
+# Follow blender.gin pattern for memory efficiency
+Model.raydist_fn = None
+
+# Memory efficient MLP settings (following blender.gin)
+PropMLP.disable_density_normals = True
+PropMLP.disable_rgb = True
+PropMLP.grid_level_dim = 1
+
+NerfMLP.disable_density_normals = True
+NerfMLP.grid_level_dim = 1
+
+# Data loss
+Config.data_loss_type = 'charb' 
