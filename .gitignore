@@ -15,3 +15,9 @@ test2.py
 scripts/train_360_debug.sh
 zipnerf-env/
 trimip/
+confidence_comparison/
+confidence_grids_corrected/
+confidence_grids_lego/
+debug_grids/
+data/
+sphere_*
