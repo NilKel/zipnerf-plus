@@ -565,10 +565,46 @@ class LLFF(Dataset):
 
         # Scale the inverse intrinsics matrix by the image downsampling factor.
         pixtocam = pixtocam @ np.diag([factor, factor, 1.])
-        self.pixtocams = pixtocam.astype(np.float32)
-        self.focal = 1. / self.pixtocams[0, 0]
-        self.distortion_params = distortion_params
-        self.camtype = camtype
+
+        # Select the split.
+        all_indices = np.arange(len(image_names))
+        if config.llff_use_all_images_for_training:
+            train_indices = all_indices
+        else:
+            train_indices = all_indices % config.llffhold != 0
+        if config.llff_use_all_images_for_testing:
+            test_indices = all_indices
+        else:
+            test_indices = all_indices % config.llffhold == 0
+        split_indices = {
+            utils.DataSplit.TEST: all_indices[test_indices],
+            utils.DataSplit.TRAIN: all_indices[train_indices],
+        }
+        indices = split_indices[self.split]
+        image_names = [image_names[i] for i in indices]
+        poses = poses[indices]
+
+        # Load poses.
+        poses = poses.copy()
+
+        # Load bounds.
+        bounds = bounds[::config.llffhold] if self.split == utils.DataSplit.TEST else bounds
+
+        # Recenter poses.
+        poses, transform = camera_utils.recenter_poses(poses)
+        self.colmap_to_world_transform = transform
+
+        # Scale scene according to bounds.
+        if config.forward_facing:
+            # Set the projective matrix defining the NDC transformation.
+            self.pixtocam_ndc = pixtocam.reshape(3, 3)
+            # Rescale according to the bounds.
+            scale = 1. / (bounds.min() * 0.75)
+            poses[:, :3, 3] *= scale
+        else:
+            # Rescale according to the bounds.
+            scale = 2. / (bounds.max() - bounds.min())
+            poses[:, :3, 3] *= scale
 
         # Separate out 360 versus forward facing scenes.
         if config.forward_facing:
@@ -677,6 +713,11 @@ class LLFF(Dataset):
         self.images = images
         self.camtoworlds = self.render_poses if config.render_path else poses
         self.height, self.width = images.shape[1:3]
+        
+        # Set up camera parameters.
+        self.pixtocams = np.broadcast_to(pixtocam, poses.shape[:1] + (3, 3))
+        self.distortion_params = distortion_params
+        self.focal = 1. / pixtocam[0, 0]
 
 
 class TanksAndTemplesNerfPP(Dataset):
@@ -885,6 +926,7 @@ class Multicam(Dataset):
 
         images, camtoworlds, pixtocams, pixtocam_ndc = \
             self.images, self.camtoworlds, self.pixtocams, self.pixtocam_ndc
+        
         self.heights, self.widths, self.focals, self.images, self.camtoworlds, self.pixtocams, self.lossmults = [], [], [], [], [], [], []
         if pixtocam_ndc is not None:
             self.pixtocam_ndc = []
@@ -893,26 +935,35 @@ class Multicam(Dataset):
 
         for i in range(self._n_examples):
             for j in range(self.multiscale_levels):
+                
                 self.heights.append(self.height // 2 ** j)
                 self.widths.append(self.width // 2 ** j)
 
-                self.pixtocams.append(pixtocams @ np.diag([self.height / self.heights[-1],
+                # Compute focal length from original camera matrix before scaling
+                original_focal = 1. / pixtocams[i][0, 0]
+                scaled_focal = original_focal * (self.height / self.heights[-1])
+                self.focals.append(scaled_focal)
+                
+                # Apply scaling transformation to camera matrix
+                self.pixtocams.append(pixtocams[i] @ np.diag([self.height / self.heights[-1],
                                                            self.width / self.widths[-1],
                                                            1.]))
-                self.focals.append(1. / self.pixtocams[-1][0, 0])
                 if config.forward_facing:
                     # Set the projective matrix defining the NDC transformation.
                     self.pixtocam_ndc.append(pixtocams.reshape(3, 3))
 
                 self.camtoworlds.append(camtoworlds[i])
                 self.lossmults.append(2. ** j)
+                
                 self.images.append(self.down2(images[i], (self.heights[-1], self.widths[-1])))
+        
         self.pixtocams = np.stack(self.pixtocams)
         self.camtoworlds = np.stack(self.camtoworlds)
         self.cameras = (self.pixtocams,
                         self.camtoworlds,
                         self.distortion_params,
                         np.stack(self.pixtocam_ndc) if self.pixtocam_ndc is not None else None)
+        
         self._generate_rays()
 
         if self.split == utils.DataSplit.TRAIN:
@@ -937,6 +988,7 @@ class Multicam(Dataset):
             self._next_fn = self._next_test
 
     def _generate_rays(self):
+        
         if self.global_rank == 0:
             tbar = tqdm(range(len(self.camtoworlds)), desc='Generating rays', leave=False)
         else:
@@ -944,8 +996,10 @@ class Multicam(Dataset):
 
         self.batches = defaultdict(list)
         for cam_idx in tbar:
+            
             pix_x_int, pix_y_int = camera_utils.pixel_coordinates(
                 self.widths[cam_idx], self.heights[cam_idx])
+            
             broadcast_scalar = lambda x: np.broadcast_to(x, pix_x_int.shape)[..., None]
             ray_kwargs = {
                 'lossmult': broadcast_scalar(self.lossmults[cam_idx]),
@@ -957,6 +1011,7 @@ class Multicam(Dataset):
             pixels = dict(pix_x_int=pix_x_int, pix_y_int=pix_y_int, **ray_kwargs)
 
             batch = camera_utils.cast_ray_batch(self.cameras, pixels, self.camtype)
+            
             if not self.render_path:
                 batch['rgb'] = self.images[cam_idx]
             if self._load_disps:
@@ -964,8 +1019,13 @@ class Multicam(Dataset):
             if self._load_normals:
                 batch['normals'] = self.normal_images[cam_idx, pix_y_int, pix_x_int]
                 batch['alphas'] = self.alphas[cam_idx, pix_y_int, pix_x_int]
+            
             for k, v in batch.items():
                 self.batches[k].append(v)
+        
+        for k, v in self.batches.items():
+            if v and len(v) > 0:
+                print(f"[DEBUG] Multicam._generate_rays: {k}: {len(v)} items, first item shape: {v[0].shape if v[0] is not None else 'None'}")
 
     def _next_train(self, item):
         """Sample next training batch (random rays)."""

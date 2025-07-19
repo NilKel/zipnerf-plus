@@ -4,9 +4,9 @@ import torch.nn.functional as F
 from pathlib import Path
 
 class ConfidenceField(nn.Module):
-    def __init__(self, resolution=(128, 128, 128), init_val=-0.5, init_rand_mag=1.0, device='cuda', 
+    def __init__(self, resolution=(128, 128, 128), init_val=-1, init_rand_mag=2.0, post_mult=0.01, device='cuda', 
                  stencil_type='central_difference_4th_order', pretrained_grid_path=None, freeze_pretrained=True,
-                 binary_occupancy=False, analytical_gradient=False):
+                 binary_occupancy=False, analytical_gradient=False, use_admm_pruner=False, contraction_aware_gradients=True):
         """
         Initialize ConfidenceField.
         
@@ -20,6 +20,8 @@ class ConfidenceField(nn.Module):
             freeze_pretrained: If True and pretrained_grid_path is provided, freeze the grid (no gradients)
             binary_occupancy: If True, use binary occupancy with STE instead of smooth sigmoid
             analytical_gradient: If True, use analytical gradient (autograd) instead of stencil-based finite differences
+            use_admm_pruner: If True, enable ADMM pruning functionality
+            contraction_aware_gradients: If True, account for spatial contraction in gradient computation
         """
         super().__init__()
         self.resolution = resolution
@@ -27,9 +29,21 @@ class ConfidenceField(nn.Module):
         self.freeze_pretrained = freeze_pretrained
         self.binary_occupancy = binary_occupancy
         self.analytical_gradient = analytical_gradient
+        self.use_admm_pruner = use_admm_pruner
+        self.contraction_aware_gradients = contraction_aware_gradients
         
         # Initialize logits to be slightly negative on average
         self.c_grid = nn.Parameter(torch.randn(*resolution, device=device) * init_rand_mag + init_val)
+        # self.c_grid = nn.Parameter(torch.nn.init.uniform_(*resolution, -0.01, 0.01))
+        
+        # ADMM Pruner initialization
+        if self.use_admm_pruner:
+            # Dual variable (γ) for ADMM optimization - Lagrange multiplier
+            self.dual_variable = nn.Parameter(torch.tensor(0.0, device=device))
+            self.dual_variable.requires_grad_(False)  # Updated manually, not by optimizer
+            
+            # Cache for total grid elements (computed once)
+            self.total_grid_elements = self.c_grid.nelement()
         
         # Load pretrained grid if provided
         if pretrained_grid_path is not None and pretrained_grid_path != '':
@@ -193,15 +207,19 @@ class ConfidenceField(nn.Module):
             grad_y = grad_y_bin.detach() + (grad_y_cont - grad_y_cont.detach())
             grad_z = grad_z_bin.detach() + (grad_z_cont - grad_z_cont.detach())
             
-            # Apply grid spacing correction for normalized coordinates [-1, 1]
-            D, H, W = self.resolution
-            scale_z = (D - 1) / 2.0  # 1 / grid_spacing_z
-            scale_y = (H - 1) / 2.0  # 1 / grid_spacing_y  
-            scale_x = (W - 1) / 2.0  # 1 / grid_spacing_x
-            
-            grad_x = grad_x * scale_x
-            grad_y = grad_y * scale_y
-            grad_z = grad_z * scale_z
+            # Apply grid spacing correction
+            if self.contraction_aware_gradients:
+                grad_x, grad_y, grad_z = self._apply_contraction_aware_scaling(grad_x, grad_y, grad_z)
+            else:
+                # Original uniform spacing correction for [-1, 1] coordinates
+                D, H, W = self.resolution
+                scale_z = (D - 1) / 2.0  # 1 / grid_spacing_z
+                scale_y = (H - 1) / 2.0  # 1 / grid_spacing_y  
+                scale_x = (W - 1) / 2.0  # 1 / grid_spacing_x
+                
+                grad_x = grad_x * scale_x
+                grad_y = grad_y * scale_y
+                grad_z = grad_z * scale_z
             
             # Store gradient grid of shape (1, 3, D, H, W)
             self.grad_c_grid = torch.cat([grad_x, grad_y, grad_z], dim=1)
@@ -222,18 +240,85 @@ class ConfidenceField(nn.Module):
             conf_padded_z = F.pad(conf, (0, 0, 0, 0, padding, padding), mode='replicate')
             grad_z = F.conv3d(conf_padded_z, self.kernel_dz, padding=0)
             
-            # Apply grid spacing correction for normalized coordinates [-1, 1]
-            D, H, W = self.resolution
-            scale_z = (D - 1) / 2.0  # 1 / grid_spacing_z
-            scale_y = (H - 1) / 2.0  # 1 / grid_spacing_y  
-            scale_x = (W - 1) / 2.0  # 1 / grid_spacing_x
-            
-            grad_x = grad_x * scale_x
-            grad_y = grad_y * scale_y
-            grad_z = grad_z * scale_z
+            # Apply grid spacing correction
+            if self.contraction_aware_gradients:
+                grad_x, grad_y, grad_z = self._apply_contraction_aware_scaling(grad_x, grad_y, grad_z)
+            else:
+                # Original uniform spacing correction for [-1, 1] coordinates
+                D, H, W = self.resolution
+                scale_z = (D - 1) / 2.0  # 1 / grid_spacing_z
+                scale_y = (H - 1) / 2.0  # 1 / grid_spacing_y  
+                scale_x = (W - 1) / 2.0  # 1 / grid_spacing_x
+                
+                grad_x = grad_x * scale_x
+                grad_y = grad_y * scale_y
+                grad_z = grad_z * scale_z
             
             # Store gradient grid of shape (1, 3, D, H, W)
             self.grad_c_grid = torch.cat([grad_x, grad_y, grad_z], dim=1)
+
+    def _apply_contraction_aware_scaling(self, grad_x, grad_y, grad_z):
+        """
+        Apply contraction-aware scaling to gradients computed via finite differences.
+        
+        The key insight: after spatial contraction, grid cells don't represent uniform
+        world-space distances. We need to account for the contraction function's Jacobian.
+        
+        For the standard mip-NeRF 360 contraction:
+        - Points inside unit sphere: mapped nearly linearly  
+        - Points outside unit sphere: compressed into shell [1, 2]
+        
+        Args:
+            grad_x, grad_y, grad_z: Raw gradients from finite differences
+            
+        Returns:
+            Scaled gradients that account for non-uniform spacing
+        """
+        D, H, W = self.resolution
+        
+        # Create coordinate grids in [-1, 1] (contracted space)
+        z_coords = torch.linspace(-1, 1, D, device=grad_x.device)
+        y_coords = torch.linspace(-1, 1, H, device=grad_x.device)  
+        x_coords = torch.linspace(-1, 1, W, device=grad_x.device)
+        
+        # Create meshgrid for all grid points
+        zz, yy, xx = torch.meshgrid(z_coords, y_coords, x_coords, indexing='ij')
+        grid_coords = torch.stack([zz, yy, xx], dim=-1)  # (D, H, W, 3)
+        
+        # Compute contraction scaling factor at each grid point
+        # For mip-NeRF 360 contraction: f(x) = x if |x|<=1, else (2-1/|x|) * x/|x|
+        # The Jacobian diagonal elements give us the local scaling
+        coord_norm = torch.norm(grid_coords, dim=-1, keepdim=True)  # (D, H, W, 1)
+        
+        # For points outside unit sphere, contraction introduces non-uniform scaling
+        # df/dx = 1 if |x|<=1, else 1/|x|^2 for the dominant term
+        # This is an approximation - the full Jacobian is more complex
+        scaling_factor = 1.0/torch.where(
+            coord_norm <= 1.0,
+            torch.ones_like(coord_norm),  # Linear region: no scaling needed
+            1.0 / (coord_norm ** 2 + 1e-8)  # Contracted region: inverse squared scaling
+        )
+        
+        # Apply scaling to gradients
+        # Note: This is a simplified approach. A full solution would compute the exact Jacobian.
+        scaling_factor = scaling_factor.squeeze(-1)  # (D, H, W)
+        scaling_factor = scaling_factor.unsqueeze(0).unsqueeze(0)  # (1, 1, D, H, W)
+        
+        # Scale gradients by the contraction factor
+        grad_x_scaled = grad_x * scaling_factor
+        grad_y_scaled = grad_y * scaling_factor  
+        grad_z_scaled = grad_z * scaling_factor
+        
+        # Still apply the basic grid spacing correction for [-1, 1] coordinates
+        base_scale_z = (D - 1) / 2.0
+        base_scale_y = (H - 1) / 2.0
+        base_scale_x = (W - 1) / 2.0
+        
+        grad_x_final = grad_x_scaled * base_scale_x
+        grad_y_final = grad_y_scaled * base_scale_y
+        grad_z_final = grad_z_scaled * base_scale_z
+        
+        return grad_x_final, grad_y_final, grad_z_final
 
     def get_analytical_gradient_at_points(self, points_normalized):
         """
@@ -410,3 +495,124 @@ class ConfidenceField(nn.Module):
         C = self.get_confidence()
         loss_reg = torch.mean(-C * torch.log(C + 1e-8) - (1-C) * torch.log(1-C + 1e-8))
         return loss_reg 
+    
+    # ADMM Pruner Methods
+    def get_current_sparsity(self):
+        """
+        Compute the current sparsity of the confidence grid.
+        Returns the L1 norm of sigmoid-activated grid (number of "active" voxels).
+        """
+        if not self.use_admm_pruner:
+            raise RuntimeError("ADMM pruner not enabled. Set use_admm_pruner=True in initialization.")
+        return torch.sigmoid(self.c_grid).sum()
+    
+    def get_sparsity_fraction(self):
+        """Get the current sparsity as a fraction of total grid elements."""
+        if not self.use_admm_pruner:
+            raise RuntimeError("ADMM pruner not enabled. Set use_admm_pruner=True in initialization.")
+        return self.get_current_sparsity() / self.total_grid_elements
+    
+    def get_admm_loss_components(self, sparsity_constraint_absolute, penalty_rho):
+        """
+        Compute ADMM augmented Lagrangian loss components.
+        
+        Args:
+            sparsity_constraint_absolute: Absolute sparsity constraint (C * total_elements)
+            penalty_rho: Quadratic penalty coefficient
+            
+        Returns:
+            dict containing:
+                - current_sparsity: Current L1 norm of sigmoid(c_grid)
+                - constraint_violation: current_sparsity - sparsity_constraint_absolute
+                - lagrangian_term: γ * constraint_violation
+                - penalty_term: (ρ/2) * constraint_violation^2
+                - total_admm_loss: lagrangian_term + penalty_term
+        """
+        if not self.use_admm_pruner:
+            raise RuntimeError("ADMM pruner not enabled. Set use_admm_pruner=True in initialization.")
+        
+        # Compute current sparsity (L1 norm of sigmoid activations)
+        current_sparsity = self.get_current_sparsity()
+        
+        # Constraint violation: g(x) = ||sigmoid(c_grid)||_1 - C
+        constraint_violation = current_sparsity - sparsity_constraint_absolute
+        
+        # Lagrangian term: γ * g(x)
+        # Detach dual_variable to treat it as constant during primal update
+        lagrangian_term = self.dual_variable.detach() * constraint_violation
+        
+        # Quadratic penalty term: (ρ/2) * g(x)^2
+        penalty_term = (penalty_rho / 2) * (constraint_violation ** 2)
+        
+        # Total ADMM loss contribution
+        total_admm_loss = lagrangian_term + penalty_term
+        
+        return {
+            'current_sparsity': current_sparsity,
+            'constraint_violation': constraint_violation,
+            'lagrangian_term': lagrangian_term,
+            'penalty_term': penalty_term,
+            'total_admm_loss': total_admm_loss,
+        }
+    
+    def update_dual_variable(self, sparsity_constraint_absolute, dual_lr):
+        """
+        Update the dual variable γ using gradient ascent.
+        This should be called after the primal optimization step.
+        
+        Args:
+            sparsity_constraint_absolute: Absolute sparsity constraint (C * total_elements)
+            dual_lr: Learning rate for dual variable update
+        """
+        if not self.use_admm_pruner:
+            raise RuntimeError("ADMM pruner not enabled. Set use_admm_pruner=True in initialization.")
+        
+        with torch.no_grad():
+            # Current sparsity (detached to avoid gradient computation)
+            current_sparsity = self.get_current_sparsity().detach()
+            
+            # Gradient of Lagrangian w.r.t. γ is just the constraint violation
+            grad_dual = current_sparsity - sparsity_constraint_absolute
+            
+            # Gradient ascent update: γ += lr * grad
+            self.dual_variable.add_(dual_lr * grad_dual)
+            
+            # Enforce non-negativity constraint: γ = max(0, γ)
+            self.dual_variable.clamp_(min=0.0)
+    
+    def get_admm_metrics(self, sparsity_constraint_fraction):
+        """
+        Get comprehensive ADMM metrics for logging.
+        
+        Args:
+            sparsity_constraint_fraction: Target sparsity fraction
+            
+        Returns:
+            dict with metrics for logging
+        """
+        if not self.use_admm_pruner:
+            return {}
+        
+        with torch.no_grad():
+            current_sparsity = self.get_current_sparsity()
+            current_fraction = current_sparsity / self.total_grid_elements
+            
+            # Additional useful metrics
+            confidence_sigmoid = torch.sigmoid(self.c_grid)
+            
+            metrics = {
+                'admm/current_sparsity_absolute': current_sparsity.item(),
+                'admm/current_sparsity_fraction': current_fraction.item(),
+                'admm/target_sparsity_fraction': sparsity_constraint_fraction,
+                'admm/sparsity_error': (current_fraction - sparsity_constraint_fraction).item(),
+                'admm/dual_variable': self.dual_variable.item(),
+                'admm/confidence_mean': confidence_sigmoid.mean().item(),
+                'admm/confidence_std': confidence_sigmoid.std().item(),
+                'admm/confidence_min': confidence_sigmoid.min().item(),
+                'admm/confidence_max': confidence_sigmoid.max().item(),
+                'admm/high_confidence_voxels_01': (confidence_sigmoid > 0.1).float().mean().item(),
+                'admm/high_confidence_voxels_05': (confidence_sigmoid > 0.5).float().mean().item(),
+                'admm/high_confidence_voxels_09': (confidence_sigmoid > 0.9).float().mean().item(),
+            }
+            
+            return metrics 

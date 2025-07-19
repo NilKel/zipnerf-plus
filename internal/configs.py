@@ -35,6 +35,18 @@ class Config:
     debug_confidence_grid_path: Optional[str] = None  # Path to pretrained confidence grid for debugging
     freeze_debug_confidence: bool = False  # If True, freeze the debug confidence grid (no gradients)
     
+    # Confidence field gradient computation
+    contraction_aware_gradients: bool = True  # If True, account for spatial contraction in gradient computation
+    
+    # ADMM Pruner settings for confidence field sparsity
+    use_admm_pruner: bool = False  # If True, enable ADMM pruning for confidence field
+    admm_sparsity_constraint: float = 0.04  # Target sparsity fraction (4% of grid remains non-zero)
+    admm_penalty_rho: float = 1e-4  # Quadratic penalty coefficient for ADMM stability
+    admm_dual_lr: float = 1e-5  # Learning rate for dual variable updates
+    admm_start_step: int = 1000  # Step to start ADMM pruning (allow initial training first)
+    admm_log_every: int = 100  # Log ADMM metrics every N steps
+    gating: bool = False
+    
     # Divergence regularization settings
     use_divergence_regularization: bool = False  # If True, enable divergence regularization
     divergence_reg_mult: float = 0.01  # Multiplier for divergence regularization loss
@@ -136,6 +148,7 @@ class Config:
     grad_max_norm: float = 0.  # Gradient clipping magnitude, disabled if == 0.
     grad_max_val: float = 0.  # Gradient clipping value, disabled if == 0.
     distortion_loss_mult: float = 0.005  # Multiplier on the distortion loss.
+    confidence_distortion_loss_mult: float = 0.005  # Multiplier on the confidence distortion loss.
     opacity_loss_mult: float = 0.  # Multiplier on the distortion loss.
 
     # Only used by eval.py:
@@ -230,12 +243,13 @@ class Config:
             
         # Auto-generate experiment name if not set or is default
         if self.exp_name == "test":
-            self.exp_name = f"{scene_name}_{model_suffix}_{self.max_steps}_{timestamp}"
+            self.exp_name = f"{scene_name}_{model_suffix}"
             
         # Append comment if provided
         if self.comment:
-            self.exp_name = f"{self.exp_name}_{self.comment}"
-            
+            self.exp_name = f"{self.exp_name}_{self.comment}_{self.max_steps}_{timestamp}"
+        else:
+            self.exp_name = f"{self.exp_name}_{self.max_steps}_{timestamp}"
         # Set wandb_name if not explicitly set
         if self.wandb_name is None:
             self.wandb_name = self.exp_name

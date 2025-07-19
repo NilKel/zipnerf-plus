@@ -155,7 +155,9 @@ class Model(nn.Module):
                 pretrained_grid_path=self.config.debug_confidence_grid_path,
                 freeze_pretrained=self.config.freeze_debug_confidence,
                 binary_occupancy=self.config.binary_occupancy,
-                analytical_gradient=self.config.analytical_gradient
+                analytical_gradient=self.config.analytical_gradient,
+                use_admm_pruner=self.config.use_admm_pruner,
+                contraction_aware_gradients=self.config.contraction_aware_gradients
             )
         else:
             self.confidence_field = None
@@ -373,8 +375,18 @@ class Model(nn.Module):
                     ray_results['rgb'], ray_results['density'], ts.mean(dim=-1))
 
             # Get the weights used by volumetric rendering (and our other losses).
+            
             weights = render.compute_alpha_weights(
                 ray_results['density'],
+                tdist,
+                batch['directions'],
+                opaque_background=self.opaque_background,
+            )[0]
+            
+            if ray_results['sampled_confidence'].shape[-1]!= ray_results['density'].shape[-1]:
+                ray_results['sampled_confidence'] = ray_results['sampled_confidence'].mean(-1)
+            weights_conf = render.compute_alpha_weights(
+                ray_results['sampled_confidence'],
                 tdist,
                 batch['directions'],
                 opaque_background=self.opaque_background,
@@ -469,6 +481,7 @@ class Model(nn.Module):
             renderings.append(rendering)
             ray_results['sdist'] = sdist.clone()
             ray_results['weights'] = weights.clone()
+            ray_results['weights_conf'] = weights_conf.clone()
             ray_history.append(ray_results)
 
         if compute_extras:
@@ -874,6 +887,9 @@ class MLP(nn.Module):
 
     def predict_density(self, means, stds, rand=False, no_warp=False, confidence_field=None, training_step=None, store_g_features=False):
         """Helper function to output density."""
+        # Initialize sampled_conf to None - will be filled if using potential encoder
+        sampled_conf = None
+        
         # Encode input positions
         if self.warp_fn is not None and not no_warp:
             means, stds = coord.track_linearize(self.warp_fn, means, stds)
@@ -909,10 +925,10 @@ class MLP(nn.Module):
                 
                 # Get occupancy gradient
                 means_for_conf = means.view(-1, 3)
-                sampled_conf, sampled_grad = confidence_field.query(means_for_conf)
+                sampled_conf_raw, sampled_grad = confidence_field.query(means_for_conf)
                 
-                # Reshape for broadcasting
-                sampled_grad = sampled_grad.view(*G.shape[:-2], 1, 3)  # [..., 1, 3]
+                sampled_conf = sampled_conf.view(*hash_features_per_level.shape[:-3], 1, 1, 1) # (..., 1, 1, 1)
+                sampled_grad = sampled_grad.view(*hash_features_per_level.shape[:-3], 1, 1, 3) # (..., 1, 1, 3)
                 
                 # Dot product: G · grad_occ
                 dot_product = -torch.sum(G * sampled_grad, dim=-1)  # [..., output_dim_F]
@@ -928,15 +944,21 @@ class MLP(nn.Module):
                 
                 # Get occupancy (sampled_conf is actually occupancy)
                 means_for_conf = means.view(-1, 3)
-                sampled_conf, _ = confidence_field.query(means_for_conf)
+                sampled_conf_raw, _ = confidence_field.query(means_for_conf)
                 
-                # Reshape for broadcasting
-                sampled_conf = sampled_conf.view(*F.shape[:-1], 1)  # [..., 1]
+                # Store the raw confidence values for distortion loss (shaped like means)
+                sampled_conf_unaveraged = sampled_conf_raw.view(*means.shape[:-1], 1)  # (..., num_samples, 1)
+                
+                # Reshape for broadcasting in feature computation
+                sampled_conf_broadcast = sampled_conf_raw.view(*F.shape[:-1], 1)  # [..., 1]
                 
                 # Element-wise multiplication: F * occ
-                features = F * sampled_conf  # [..., output_dim]
+                features = F * sampled_conf_broadcast  # [..., output_dim]
+            
+            # Average both features and confidence along the sample dimension to match density computation
             features = features.mean(dim=-2)
-
+            
+            
         elif self.config is not None and getattr(self.config, 'use_potential', False):
             # Path for potential field computation (grid encoder)
             if confidence_field is None:
@@ -957,11 +979,14 @@ class MLP(nn.Module):
             # The `means` are already in [-1, 1] for the encoder, which is what query expects.
             # aabb is (-2, -2, -2) to (2, 2, 2). So means is in (-1,1)
             # so we normalize means to be in [-1, 1]
+            
             means_for_conf = means.view(-1, 3)
             sampled_conf, sampled_grad = confidence_field.query(means_for_conf)
             
             sampled_conf = sampled_conf.view(*hash_features_per_level.shape[:-3], 1, 1, 1) # (..., 1, 1, 1)
             sampled_grad = sampled_grad.view(*hash_features_per_level.shape[:-3], 1, 1, 3) # (..., 1, 1, 3)
+            
+            
 
             if use_triplane:
                 # Normalize coordinates for triplane - clamp to ensure valid range
@@ -987,20 +1012,22 @@ class MLP(nn.Module):
             # 4. Compute dot product and multiply by confidence/occupancy
             # Dot product between feature and occupancy gradient
             
-            dot_product = torch.sum(blended_features_per_level * sampled_grad, dim=-1)
+            dot_product = -torch.sum(blended_features_per_level * sampled_grad, dim=-1)
             
             # Apply the appropriate formulation based on binary_occupancy flag
-            if self.config.binary_occupancy:
-                # Binary occupancy formulation: -binary_occ * (potential ⋅ occ_grad)
-                # where sampled_conf contains binary values (0 or 1) with threshold 0.001
-                # and sampled_grad is computed from binary occupancy
-                features = -sampled_conf.squeeze(-1) * dot_product
-            else:
-                # Smooth sigmoid formulation: -sigmoid(conf) * (potential ⋅ occ_grad)
-                # where sampled_conf contains continuous sigmoid values [0,1]
-                # and sampled_grad is computed from sigmoid confidence
-                features = -sampled_conf.squeeze(-1) * dot_product
+            # if self.config.binary_occupancy:
+            #     # Binary occupancy formulation: -binary_occ * (potential ⋅ occ_grad)
+            #     # where sampled_conf_broadcast contains binary values (0 or 1) with threshold 0.001
+            #     # and sampled_grad is computed from binary occupancy
+            #     features = sampled_conf.squeeze(-1) * dot_product
+            # else:
+            #     # Smooth sigmoid formulation: -sigmoid(conf) * (potential ⋅ occ_grad)
+            #     # where sampled_conf_broadcast contains continuous sigmoid values [0,1]
+            #     # and sampled_grad is computed from sigmoid confidence
+            #     features = sampled_conf.squeeze(-1) * dot_product
 
+            features = dot_product
+            
             if not use_triplane:
                 # The shape is now (..., num_levels, level_dim)
                 features = (features * weights[..., None]).mean(dim=-3).flatten(-2, -1)
@@ -1060,27 +1087,31 @@ class MLP(nn.Module):
         # - v is the feature vector after potential field processing  
         # - α is scheduled: 10^4 for steps < 1000, 10^5 for steps >= 1000
         # - The scaling helps with fast convergence initially and fine-tuning later
-        # if self.config is not None and getattr(self.config, 'use_potential', False):
-            # Compute 2-norm squared of features (v vector after potential processing)
-            # v_norm_squared = torch.sum(features ** 2, dim=-1)
+        if self.config.gating and self.config.use_potential:
+            #Compute 2-norm squared of features (v vector after potential processing)
+            v_norm_squared = torch.sum(features ** 2, dim=-1)
             
-            # Set alpha according to paper: 1e4 for steps < 1000, 1e5 afterward
-            # if training_step is not None and training_step >= 1000:
-            #     alpha = 1e5  # Higher alpha for fine-tuning phase
-            # else:
-            #     alpha = 1e4  # Lower alpha for fast convergence phase
+            #Set alpha according to paper: 1e4 for steps < 1000, 1e5 afterward
+            if training_step is not None and training_step >= 1000:
+                alpha = 1e5  # Higher alpha for fine-tuning phase
+            else:
+                alpha = 1e4  # Lower alpha for fast convergence phase
             
-            # Allow config override for experimentation
-            # alpha = getattr(self.config, 'potential_alpha', alpha)
+            #Allow config override for experimentation
+            alpha = getattr(self.config, 'potential_alpha', alpha)
             
-            # Apply tanh(α∥v∥2) scaling to modulate density
-            # tanh_scaling = torch.tanh(alpha * v_norm_squared)
-            # raw_density = raw_density * tanh_scaling
+            #Apply tanh(α∥v∥2) scaling to modulate density
+            tanh_scaling = torch.tanh(alpha * v_norm_squared)
+            raw_density = raw_density * tanh_scaling
         
         # Add noise to regularize the density predictions if needed.
         if rand and (self.density_noise > 0):
             raw_density += self.density_noise * torch.randn_like(raw_density)
-        return raw_density, x, means.mean(dim=-2)
+        if not self.config.use_potential:
+            sampled_conf = torch.zeros_like(raw_density)
+        else:
+            sampled_conf = sampled_conf.mean(4).squeeze(-1).squeeze(-1).squeeze(-1)
+        return raw_density, x, means.mean(dim=-2), sampled_conf
 
     def forward(self,
                 rand,
@@ -1123,13 +1154,13 @@ class MLP(nn.Module):
                            self.training)
         
         if self.disable_density_normals:
-            raw_density, x, means_contract = self.predict_density(means, stds, rand=rand, no_warp=no_warp, confidence_field=confidence_field, training_step=training_step, store_g_features=store_g_features)
+            raw_density, x, means_contract, sampled_conf = self.predict_density(means, stds, rand=rand, no_warp=no_warp, confidence_field=confidence_field, training_step=training_step, store_g_features=store_g_features)
             raw_grad_density = None
             normals = None
         else:
             with torch.enable_grad():
                 means.requires_grad_(True)
-                raw_density, x, means_contract = self.predict_density(means, stds, rand=rand, no_warp=no_warp, confidence_field=confidence_field, training_step=training_step, store_g_features=store_g_features)
+                raw_density, x, means_contract, sampled_conf = self.predict_density(means, stds, rand=rand, no_warp=no_warp, confidence_field=confidence_field, training_step=training_step, store_g_features=store_g_features)
                 d_output = torch.ones_like(raw_density, requires_grad=False, device=raw_density.device)
                 raw_grad_density = torch.autograd.grad(
                     outputs=raw_density,
@@ -1258,7 +1289,7 @@ class MLP(nn.Module):
             # Apply padding, mapping color to [-rgb_padding, 1+rgb_padding].
             rgb = rgb * (1 + 2 * self.rgb_padding) - self.rgb_padding
 
-        return dict(
+        output_dict = dict(
             coord=means_contract,
             density=density,
             rgb=rgb,
@@ -1268,6 +1299,12 @@ class MLP(nn.Module):
             normals_pred=normals_pred,
             roughness=roughness,
         )
+        
+        # Add sampled confidence if it was computed (for confidence distortion loss)
+        if sampled_conf is not None:
+            output_dict['sampled_confidence'] = sampled_conf.squeeze(-1)  # Remove last dimension
+            
+        return output_dict
 
 
 @gin.configurable

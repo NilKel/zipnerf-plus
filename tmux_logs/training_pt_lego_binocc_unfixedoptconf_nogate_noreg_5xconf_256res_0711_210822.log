@@ -1,0 +1,45 @@
+🔧 Setting up environment...
+📋 Environment verification:
+Active environment: 
+Python path: /home/nilkel/miniconda3/envs/zipnerf2/bin/python
+PyTorch version: 2.7.1+cu128
+CUDA available: True
+GPU name: NVIDIA GeForce RTX 5090
+
+🚀 Starting ZipNeRF Potential+Triplane training...
+🎬 Scene: lego
+💬 Comment: binocc_unfixedoptconf_nogate_noreg_5xconf_256res
+🔲 Binary Occupancy: False
+⏰ Started at: Fri Jul 11 09:08:30 PM CEST 2025
+📁 Data directory: /home/nilkel/Projects/data/nerf_synthetic/lego
+📋 Config: configs/potential_triplane.gin
+
+💻 Training command:
+accelerate launch train.py --gin_configs=configs/potential_triplane.gin --gin_bindings="Config.data_dir = '/home/nilkel/Projects/data/nerf_synthetic/lego'" --gin_bindings="Config.debug_confidence_grid_path = ''" --gin_bindings="Config.freeze_debug_confidence = False" --gin_bindings="Config.binary_occupancy = False" --gin_bindings="Config.confidence_grid_resolution = (256, 256, 256)" --gin_bindings="Config.comment = 'binocc_unfixedoptconf_nogate_noreg_5xconf_256res'"
+
+ipex flag is deprecated, will be removed in Accelerate v1.10. From 2.7.0, PyTorch has all needed optimizations for Intel CPU and XPU.
+Traceback (most recent call last):
+  File "/home/nilkel/Projects/zipnerf-pytorch/train.py", line 17, in <module>
+    from internal import models
+  File "/home/nilkel/Projects/zipnerf-pytorch/internal/models.py", line 8, in <module>
+    from internal import train_utils
+  File "/home/nilkel/Projects/zipnerf-pytorch/internal/train_utils.py", line 313
+    optimizer = torch.optim.Adam(model.parameters(), lr=config.lr_init, **adam_kwargs)
+    ^
+IndentationError: expected an indented block
+Traceback (most recent call last):
+  File "/home/nilkel/miniconda3/envs/zipnerf2/bin/accelerate", line 8, in <module>
+    sys.exit(main())
+  File "/home/nilkel/miniconda3/envs/zipnerf2/lib/python3.9/site-packages/accelerate/commands/accelerate_cli.py", line 50, in main
+    args.func(args)
+  File "/home/nilkel/miniconda3/envs/zipnerf2/lib/python3.9/site-packages/accelerate/commands/launch.py", line 1199, in launch_command
+    simple_launcher(args)
+  File "/home/nilkel/miniconda3/envs/zipnerf2/lib/python3.9/site-packages/accelerate/commands/launch.py", line 785, in simple_launcher
+    raise subprocess.CalledProcessError(returncode=process.returncode, cmd=cmd)
+subprocess.CalledProcessError: Command '['/home/nilkel/miniconda3/envs/zipnerf2/bin/python3.9', 'train.py', '--gin_configs=configs/potential_triplane.gin', "--gin_bindings=Config.data_dir = '/home/nilkel/Projects/data/nerf_synthetic/lego'", "--gin_bindings=Config.debug_confidence_grid_path = ''", '--gin_bindings=Config.freeze_debug_confidence = False', '--gin_bindings=Config.binary_occupancy = False', '--gin_bindings=Config.confidence_grid_resolution = (256, 256, 256)', "--gin_bindings=Config.comment = 'binocc_unfixedoptconf_nogate_noreg_5xconf_256res'"]' returned non-zero exit status 1.
+
+✅ Training completed successfully!
+⏰ Finished at: Fri Jul 11 09:08:36 PM CEST 2025
+📄 Full log: ./tmux_logs/training_pt_lego_binocc_unfixedoptconf_nogate_noreg_5xconf_256res_0711_210822.log
+📁 Check results in: exp/
+

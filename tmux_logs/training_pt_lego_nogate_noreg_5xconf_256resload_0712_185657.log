@@ -1,0 +1,84 @@
+🔧 Setting up environment...
+📋 Environment verification:
+Active environment: 
+Python path: /home/nilkel/miniconda3/envs/zipnerf2/bin/python
+PyTorch version: 2.7.1+cu128
+CUDA available: True
+GPU name: NVIDIA GeForce RTX 5090
+
+🚀 Starting ZipNeRF Potential+Triplane training...
+🎬 Scene: lego
+💬 Comment: nogate_noreg_5xconf_256resload
+🔲 Binary Occupancy: --gin_bindings=Config.debug_confidence_grid_path = 'debug_grids/debug_confidence_grid_256.pt'
+⏰ Started at: Sat Jul 12 06:57:06 PM CEST 2025
+📁 Data directory: /home/nilkel/Projects/data/nerf_synthetic/lego
+📋 Config: configs/potential_triplane.gin
+
+💻 Training command:
+accelerate launch train.py --gin_configs=configs/potential_triplane.gin --gin_bindings='Config.data_dir = "/home/nilkel/Projects/data/nerf_synthetic/lego"' --gin_bindings='Config.debug_confidence_grid_path = ""' --gin_bindings='Config.freeze_debug_confidence = False' --gin_bindings='Config.binary_occupancy = --gin_bindings=Config.debug_confidence_grid_path = 'debug_grids/debug_confidence_grid_256.pt'' --gin_bindings='Config.confidence_grid_resolution = (256, 256, 256)' --gin_bindings='Config.comment = "nogate_noreg_5xconf_256resload"'
+
+ipex flag is deprecated, will be removed in Accelerate v1.10. From 2.7.0, PyTorch has all needed optimizations for Intel CPU and XPU.
+/home/nilkel/Projects/zipnerf-pytorch/gridencoder/grid.py:23: FutureWarning: `torch.cuda.amp.custom_fwd(args...)` is deprecated. Please use `torch.amp.custom_fwd(args..., device_type='cuda')` instead.
+  def forward(ctx, backend, inputs, embeddings, offsets, per_level_scale, base_resolution, calc_grad_inputs=False, gridtype=0, align_corners=False, interpolation=0):
+/home/nilkel/Projects/zipnerf-pytorch/gridencoder/grid.py:66: FutureWarning: `torch.cuda.amp.custom_bwd(args...)` is deprecated. Please use `torch.amp.custom_bwd(args..., device_type='cuda')` instead.
+  def backward(ctx, grad):
+/home/nilkel/Projects/zipnerf-pytorch/gridencoder/grid.py:179: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  @torch.cuda.amp.autocast(enabled=False)
+/home/nilkel/Projects/zipnerf-pytorch/gridencoder/grid.py:273: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  @torch.cuda.amp.autocast(enabled=False)
+Traceback (most recent call last):
+  File "/home/nilkel/Projects/zipnerf-pytorch/train.py", line 716, in <module>
+    app.run(main)
+  File "/home/nilkel/miniconda3/envs/zipnerf2/lib/python3.9/site-packages/absl/app.py", line 316, in run
+    _run_main(main, args)
+  File "/home/nilkel/miniconda3/envs/zipnerf2/lib/python3.9/site-packages/absl/app.py", line 261, in _run_main
+    sys.exit(main(argv))
+  File "/home/nilkel/Projects/zipnerf-pytorch/train.py", line 37, in main
+    config = configs.load_config()
+  File "/home/nilkel/Projects/zipnerf-pytorch/internal/configs.py", line 244, in load_config
+    gin.parse_config_files_and_bindings(
+  File "/home/nilkel/miniconda3/envs/zipnerf2/lib/python3.9/site-packages/gin/config.py", line 2499, in parse_config_files_and_bindings
+    parse_config(bindings, skip_unknown)
+  File "/home/nilkel/miniconda3/envs/zipnerf2/lib/python3.9/site-packages/gin/config.py", line 2322, in parse_config
+    for statement in parser:
+  File "/home/nilkel/miniconda3/envs/zipnerf2/lib/python3.9/site-packages/gin/config_parser.py", line 211, in __next__
+    statement = self.parse_statement()
+  File "/home/nilkel/miniconda3/envs/zipnerf2/lib/python3.9/site-packages/gin/config_parser.py", line 240, in parse_statement
+    value = self.parse_value()
+  File "/home/nilkel/miniconda3/envs/zipnerf2/lib/python3.9/site-packages/gin/config_parser.py", line 283, in parse_value
+    self._raise_syntax_error('Unable to parse value.')
+  File "/home/nilkel/miniconda3/envs/zipnerf2/lib/python3.9/site-packages/gin/config_parser.py", line 331, in _raise_syntax_error
+    raise SyntaxError(msg, location)
+  File "<string>", line 4
+    Config.binary_occupancy = --gin_bindings=Config.debug_confidence_grid_path = debug_grids/debug_confidence_grid_256.pt
+                              ^
+SyntaxError: Unable to parse value.
+Traceback (most recent call last):
+  File "/home/nilkel/miniconda3/envs/zipnerf2/bin/accelerate", line 8, in <module>
+    sys.exit(main())
+  File "/home/nilkel/miniconda3/envs/zipnerf2/lib/python3.9/site-packages/accelerate/commands/accelerate_cli.py", line 50, in main
+    args.func(args)
+  File "/home/nilkel/miniconda3/envs/zipnerf2/lib/python3.9/site-packages/accelerate/commands/launch.py", line 1199, in launch_command
+    simple_launcher(args)
+  File "/home/nilkel/miniconda3/envs/zipnerf2/lib/python3.9/site-packages/accelerate/commands/launch.py", line 785, in simple_launcher
+    raise subprocess.CalledProcessError(returncode=process.returncode, cmd=cmd)
+subprocess.CalledProcessError: Command '['/home/nilkel/miniconda3/envs/zipnerf2/bin/python3.9', 'train.py', '--gin_configs=configs/potential_triplane.gin', '--gin_bindings=Config.data_dir = "/home/nilkel/Projects/data/nerf_synthetic/lego"', '--gin_bindings=Config.debug_confidence_grid_path = ""', '--gin_bindings=Config.freeze_debug_confidence = False', '--gin_bindings=Config.binary_occupancy = --gin_bindings=Config.debug_confidence_grid_path = debug_grids/debug_confidence_grid_256.pt', '--gin_bindings=Config.confidence_grid_resolution = (256, 256, 256)', '--gin_bindings=Config.comment = "nogate_noreg_5xconf_256resload"']' returned non-zero exit status 1.
+
+✅ Training completed successfully!
+⏰ Finished at: Sat Jul 12 06:57:12 PM CEST 2025
+📄 Full log: ./tmux_logs/training_pt_lego_nogate_noreg_5xconf_256resload_0712_185657.log
+📁 Check results in: exp/
+
+💾 Saving learned confidence grid...
+🔍 Looking for experiment in: exp/lego_triplane_25000_0705_2252
+📂 Found final checkpoint: exp/lego_triplane_25000_0705_2252/checkpoints/025000
+/home/nilkel/Projects/zipnerf-pytorch/gridencoder/grid.py:23: FutureWarning: `torch.cuda.amp.custom_fwd(args...)` is deprecated. Please use `torch.amp.custom_fwd(args..., device_type='cuda')` instead.
+  def forward(ctx, backend, inputs, embeddings, offsets, per_level_scale, base_resolution, calc_grad_inputs=False, gridtype=0, align_corners=False, interpolation=0):
+/home/nilkel/Projects/zipnerf-pytorch/gridencoder/grid.py:66: FutureWarning: `torch.cuda.amp.custom_bwd(args...)` is deprecated. Please use `torch.amp.custom_bwd(args..., device_type='cuda')` instead.
+  def backward(ctx, grad):
+/home/nilkel/Projects/zipnerf-pytorch/gridencoder/grid.py:179: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  @torch.cuda.amp.autocast(enabled=False)
+/home/nilkel/Projects/zipnerf-pytorch/gridencoder/grid.py:273: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  @torch.cuda.amp.autocast(enabled=False)
+❌ No confidence field found in model
+

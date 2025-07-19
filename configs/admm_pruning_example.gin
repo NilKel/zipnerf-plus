@@ -1,0 +1,44 @@
+# Example configuration for ADMM Pruning with Potential Encoder
+# This config demonstrates how to enable and tune ADMM pruning for sparse confidence fields
+
+# Basic experiment setup
+Config.exp_name = "admm_pruning_test"
+Config.data_dir = "/path/to/your/nerf_dataset"
+Config.max_steps = 25000
+
+# Enable potential encoder with confidence field
+Config.use_potential = True
+Config.confidence_grid_resolution = (128, 128, 128)
+
+# Enable ADMM Pruning for sparse confidence field
+Config.use_admm_pruner = True
+Config.admm_sparsity_constraint = 0.04  # Target 4% sparsity (96% of voxels pruned)
+Config.admm_penalty_rho = 1e-4  # Quadratic penalty coefficient
+Config.admm_dual_lr = 1e-5  # Learning rate for dual variable
+Config.admm_start_step = 1000  # Start ADMM after 1000 steps of initial training
+Config.admm_log_every = 100  # Log ADMM metrics every 100 steps
+
+# Basic training configuration
+Config.batch_size = 8192  # Smaller batch size due to potential encoder overhead
+Config.lr_init = 0.01
+Config.lr_final = 0.001
+
+# Logging configuration
+Config.use_wandb = True
+Config.wandb_project = "admm_pruning_experiments" 
+Config.print_every = 100
+
+# Model configuration
+Model.num_prop_samples = 64
+Model.num_nerf_samples = 32
+Model.num_levels = 3
+
+# MLP configuration for potential encoder
+NerfMLP.use_potential = True
+PropMLP.use_potential = True
+
+# Additional loss terms (optional)
+Config.confidence_reg_mult = 0.001  # Small regularization for confidence field
+
+# Rendering configuration
+Config.render_chunk_size = 32768  # Adjust based on GPU memory 

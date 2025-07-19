@@ -1,6 +1,7 @@
 import collections
 import functools
 
+import torch
 import torch.optim
 from internal import camera_utils
 from internal import configs
@@ -174,6 +175,23 @@ def distortion_loss(ray_history, config):
     w = last_ray_results['weights']
     loss = stepfun.lossfun_distortion(c, w).mean()
     return config.distortion_loss_mult * loss
+
+
+def confidence_distortion_loss(ray_history, config):
+    """Computes distortion loss on sampled confidence values to encourage compact occupancy distributions."""
+    # Apply loss only to the final NeRF level where geometry should be sharpest
+    last_ray_results = ray_history[-1]
+    
+    if 'sampled_confidence' not in last_ray_results:
+        # If confidence wasn't sampled (e.g., not using potential), loss is zero
+        return torch.tensor(0.0, device=last_ray_results['sdist'].device)
+        
+    c = last_ray_results['sdist']  # Normalized distances
+    w = last_ray_results['weights_conf']  # Sampled confidence values along rays
+    
+    # Use the same distortion loss function but with confidence values as weights
+    loss = stepfun.lossfun_distortion(c, w).mean()
+    return config.confidence_distortion_loss_mult * loss
 
 
 def orientation_loss(batch, model, ray_history, config):

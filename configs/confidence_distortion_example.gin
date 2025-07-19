@@ -1,0 +1,14 @@
+# Configuration example for enabling confidence distortion loss
+# This loss encourages compact occupancy distributions along rays,
+# helping to reduce floaters in the confidence field.
+
+include 'configs/zip.gin'
+
+# Enable confidence distortion loss
+Config.confidence_distortion_loss_mult = 0.01  # Start with same magnitude as regular distortion loss
+
+# Make sure we're using potential encoder (required for confidence distortion loss)
+Config.use_potential = True
+
+# Enable confidence field if not already enabled
+Config.confidence_grid_resolution = (128, 128, 128) 

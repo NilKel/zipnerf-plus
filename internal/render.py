@@ -196,7 +196,7 @@ def compute_alpha_weights(density, tdist, dirs, opaque_background=False):
         print(f"   tdist.shape: {tdist.shape}")
         print(f"   dirs.shape: {dirs.shape}")
         print(f"   t_delta.shape: {t_delta.shape}")
-        
+    
     density_delta = density * delta
 
     if opaque_background:

@@ -226,6 +226,7 @@ def main(unused_argv):
                 'interlevel_loss_mult': config.interlevel_loss_mult,
                 'anti_interlevel_loss_mult': config.anti_interlevel_loss_mult,
                 'distortion_loss_mult': config.distortion_loss_mult,
+        'confidence_distortion_loss_mult': config.confidence_distortion_loss_mult,
                 'opacity_loss_mult': config.opacity_loss_mult,
                 'orientation_loss_mult': config.orientation_loss_mult,
                 'orientation_coarse_loss_mult': config.orientation_coarse_loss_mult,
@@ -372,6 +373,10 @@ def main(unused_argv):
             if config.distortion_loss_mult > 0:
                 losses['distortion'] = train_utils.distortion_loss(ray_history, config)
 
+            # confidence distortion loss
+            if config.confidence_distortion_loss_mult > 0:
+                losses['confidence_distortion'] = train_utils.confidence_distortion_loss(ray_history, config)
+
             # opacity loss
             if config.opacity_loss_mult > 0:
                 losses['opacity'] = train_utils.opacity_loss(renderings, config)
@@ -396,16 +401,38 @@ def main(unused_argv):
                 confidence_reg_loss = module.confidence_field.get_regularization_loss()
                 losses['confidence_reg'] = config.confidence_reg_mult * confidence_reg_loss
                 
-                # Log confidence sparsity metrics
+                # Log confidence grid L1 norm directly for sparsity tracking
                 with torch.no_grad():
                     conf_sigmoid = module.confidence_field.get_confidence()
-                    stats['confidence_sparsity_l1'] = conf_sigmoid.sum().item()
-                    stats['confidence_sparsity_mean'] = conf_sigmoid.mean().item()
-                    stats['confidence_sparsity_std'] = conf_sigmoid.std().item()
+                    # Direct L1 norm of confidence grid (shows total "mass" in grid)
+                    stats['confidence_l1_norm'] = conf_sigmoid.sum().item()
+                    stats['confidence_mean'] = conf_sigmoid.mean().item()
                     # Count how many voxels are above certain thresholds (measures scene density)
                     stats['confidence_active_01'] = (conf_sigmoid > 0.1).float().mean().item()
                     stats['confidence_active_05'] = (conf_sigmoid > 0.5).float().mean().item()
                     stats['confidence_active_09'] = (conf_sigmoid > 0.9).float().mean().item()
+            
+            # ADMM Pruner for confidence field sparsity
+            if (config.use_admm_pruner and hasattr(module, 'confidence_field') and 
+                module.confidence_field is not None and module.confidence_field.use_admm_pruner and
+                step >= config.admm_start_step):
+                
+                # Calculate absolute sparsity constraint from fraction
+                sparsity_constraint_absolute = (config.admm_sparsity_constraint * 
+                                              module.confidence_field.total_grid_elements)
+                
+                # Get ADMM loss components
+                admm_components = module.confidence_field.get_admm_loss_components(
+                    sparsity_constraint_absolute, config.admm_penalty_rho)
+                
+                # Add ADMM loss to total loss
+                losses['admm'] = admm_components['total_admm_loss']
+                
+                # Log ADMM components for debugging
+                stats['admm_lagrangian'] = admm_components['lagrangian_term'].item()
+                stats['admm_penalty'] = admm_components['penalty_term'].item()
+                stats['admm_constraint_violation'] = admm_components['constraint_violation'].item()
+                stats['admm_current_sparsity'] = admm_components['current_sparsity'].item()
             
             # Divergence regularization step
             if (config.use_divergence_regularization and 
@@ -440,6 +467,19 @@ def main(unused_argv):
             # clip gradient by max/norm/nan
             train_utils.clip_gradients(model, accelerator, config)
             optimizer.step()
+            
+            # ADMM Dual Variable Update (after primal optimization step)
+            if (config.use_admm_pruner and hasattr(module, 'confidence_field') and 
+                module.confidence_field is not None and module.confidence_field.use_admm_pruner and
+                step >= config.admm_start_step):
+                
+                # Calculate absolute sparsity constraint from fraction
+                sparsity_constraint_absolute = (config.admm_sparsity_constraint * 
+                                              module.confidence_field.total_grid_elements)
+                
+                # Update dual variable γ using gradient ascent
+                module.confidence_field.update_dual_variable(
+                    sparsity_constraint_absolute, config.admm_dual_lr)
 
             stats['psnrs'] = image.mse_to_psnr(stats['mses'])
             stats['psnr'] = stats['psnrs'][-1]
@@ -499,6 +539,19 @@ def main(unused_argv):
                             summ_fn('train_learning_rate_confidence', learning_rate_confidence)
                         summ_fn('train_steps_per_sec', steps_per_sec)
                         summ_fn('train_rays_per_sec', rays_per_sec)
+                        
+                        # ADMM metrics logging
+                        if (config.use_admm_pruner and hasattr(module, 'confidence_field') and 
+                            module.confidence_field is not None and module.confidence_field.use_admm_pruner and
+                            step >= config.admm_start_step and step % config.admm_log_every == 0):
+                            
+                            admm_metrics = module.confidence_field.get_admm_metrics(config.admm_sparsity_constraint)
+                            for metric_name, metric_value in admm_metrics.items():
+                                summ_fn(f'train_{metric_name}', metric_value)
+                        
+                        # Log confidence L1 norm for sparsity tracking
+                        if 'confidence_l1_norm' in avg_stats:
+                            summ_fn('train_confidence_l1_norm', avg_stats['confidence_l1_norm'])
 
                         summary_writer.add_scalar('train_avg_psnr_timed', avg_stats['psnr'],
                                                   total_time // TIME_PRECISION)
@@ -543,8 +596,22 @@ def main(unused_argv):
                                 wandb_log[f'metrics/{k}'] = v
                             elif k in ['grid_div_loss', 'div_reg_loss']:
                                 wandb_log[f'divergence/{k}'] = v
+                            elif k.startswith('admm_'):
+                                wandb_log[f'admm/{k[5:]}'] = v
+                            elif k == 'confidence_l1_norm':
+                                wandb_log['confidence/l1_norm'] = v
+                            elif k.startswith('confidence_'):
+                                wandb_log[f'confidence/{k[11:]}'] = v  # Remove 'confidence_' prefix
                             else:
                                 wandb_log[f'training/{k}'] = v
+                        
+                        # Log ADMM detailed metrics if enabled
+                        if (config.use_admm_pruner and hasattr(module, 'confidence_field') and 
+                            module.confidence_field is not None and module.confidence_field.use_admm_pruner and
+                            step >= config.admm_start_step and step % config.admm_log_every == 0):
+                            
+                            admm_metrics = module.confidence_field.get_admm_metrics(config.admm_sparsity_constraint)
+                            wandb_log.update(admm_metrics)
                         
                         # Log max statistics (for monitoring outliers)
                         for k, v in max_stats.items():
@@ -576,16 +643,43 @@ def main(unused_argv):
                     precision = int(np.ceil(np.log10(config.max_steps))) + 1
                     avg_loss = avg_stats['loss']
                     avg_psnr = avg_stats['psnr']
-                    str_losses = {  # Grab each "losses_{x}" field and print it as "x[:4]".
+                    
+                    # Create loss breakdown showing total|sparsity format
+                    loss_breakdown = f"{avg_loss:0.5f}"
+                    if 'losses/admm' in avg_stats:
+                        admm_loss = avg_stats['losses/admm']
+                        loss_breakdown += f"|{admm_loss:0.5f}"
+                    
+                    # Build other loss terms (excluding admm since we show it separately)
+                    str_losses = {  
                         k[7:11]: (f'{v:0.5f}' if 1e-4 <= v < 10 else f'{v:0.1e}')
                         for k, v in avg_stats.items()
-                        if k.startswith('losses/')
+                        if k.startswith('losses/') and not k.endswith('/admm')
                     }
+                    
+                    # Replace confidence reg with L1 norm in the loss display
+                    if 'confidence_l1_norm' in avg_stats:
+                        # Show L1 norm instead of confidence regularization loss
+                        str_losses['conf_l1'] = f"{avg_stats['confidence_l1_norm']:0.0f}"
+                        # Remove confidence_reg from display if it exists
+                        str_losses.pop('conf', None)  # Remove 'conf' (confidence_reg shortened)
+                    
+                    # Add ADMM sparsity info to console output if enabled
+                    admm_info = ""
+                    if (config.use_admm_pruner and hasattr(module, 'confidence_field') and 
+                        module.confidence_field is not None and module.confidence_field.use_admm_pruner and
+                        step >= config.admm_start_step):
+                        
+                        current_sparsity_frac = (module.confidence_field.get_current_sparsity() / 
+                                               module.confidence_field.total_grid_elements).item()
+                        dual_var = module.confidence_field.dual_variable.item()
+                        admm_info = f',spars={current_sparsity_frac:.3f}(t={config.admm_sparsity_constraint:.3f}),γ={dual_var:.2e}'
+                    
                     logger.info(f'{step}' + f'/{config.max_steps:d}:' +
-                                f'loss={avg_loss:0.5f},' + f'psnr={avg_psnr:.3f},' +
+                                f'loss={loss_breakdown},' + f'psnr={avg_psnr:.3f},' +
                                 f'lr={learning_rate:0.2e} | ' +
                                 ','.join([f'{k}={s}' for k, s in str_losses.items()]) +
-                                f',{rays_per_sec:0.0f} r/s')
+                                f',{rays_per_sec:0.0f} r/s' + admm_info)
 
                     # Reset everything we are tracking between summarizations.
                     reset_stats = True

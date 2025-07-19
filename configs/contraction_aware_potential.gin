@@ -1,0 +1,56 @@
+# Contraction-Aware Potential Field Configuration
+# This config enables proper handling of spatial contraction in confidence field gradients
+
+# Base settings
+Config.dataset_loader = 'blender'
+Config.near = 2.0
+Config.far = 6.0
+Config.factor = 4
+
+# Enable potential field with contraction-aware gradients
+Config.use_potential = True
+Config.use_triplane = False
+Config.binary_occupancy = True
+
+# Enable contraction-aware gradient computation (NEW!)
+Config.contraction_aware_gradients = True
+
+# Confidence field settings
+Config.confidence_grid_resolution = (128, 128, 128)
+Config.confidence_reg_mult = 0.001
+
+# Training settings
+Config.max_steps = 25000
+Config.batch_size = 4096
+Config.lr_init = 0.01
+Config.lr_final = 0.001
+
+# Model configuration
+Model.raydist_fn = None
+
+# MLP settings with contraction
+NerfMLP.warp_fn = 'contract'
+PropMLP.warp_fn = 'contract'
+NerfMLP.disable_density_normals = True
+PropMLP.disable_density_normals = True
+PropMLP.disable_rgb = True
+
+# Logging
+Config.print_every = 100
+Config.use_wandb = True
+Config.wandb_project = "zipnerf-contraction-aware"
+
+# Data loss
+Config.data_loss_type = 'charb'
+Config.data_loss_mult = 1.0
+
+# ADMM Pruning (optional)
+Config.use_admm_pruner = False  # Set to True to enable sparsity enforcement
+Config.admm_sparsity_constraint = 0.04
+Config.admm_penalty_rho = 1e-4
+Config.admm_dual_lr = 1e-5
+Config.admm_start_step = 1000
+
+# Default paths (override as needed)
+Config.exp_name = 'contraction_aware_test'
+Config.data_dir = "/path/to/your/dataset" 
