@@ -35,8 +35,7 @@ TIME_PRECISION = 1000  # Internally represent integer times in milliseconds.
 
 def main(unused_argv):
     config = configs.load_config()
-    config.exp_path = os.path.join("exp", config.exp_name)
-    config.checkpoint_dir = os.path.join(config.exp_path, 'checkpoints')
+    # exp_path, checkpoint_dir, render_dir, and mesh_path are now set in config.__post_init__
     utils.makedirs(config.exp_path)
     with utils.open_file(os.path.join(config.exp_path, 'config.gin'), 'w') as f:
         f.write(gin.config_str())
@@ -694,6 +693,22 @@ def main(unused_argv):
 
             # Test-set evaluation.
             if config.train_render_every > 0 and step % config.train_render_every == 0:
+                # Aggressive memory cleanup before evaluation
+                # Clear any lingering gradients
+                optimizer.zero_grad()
+                
+                # Force garbage collection
+                import gc
+                gc.collect()
+                
+                # Clear GPU cache multiple times to handle fragmentation
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()  # Wait for all operations to complete
+                torch.cuda.empty_cache()
+                
+                # Set model to eval mode temporarily
+                model.eval()
+                
                 # We reuse the same random number generator from the optimization step
                 # here on purpose so that the visualization matches what happened in
                 # training.
@@ -705,10 +720,18 @@ def main(unused_argv):
                     test_batch = next(test_dataiter)
                 test_batch = accelerate.utils.send_to_device(test_batch, accelerator.device)
 
-                # render a single image with all distributed processes
-                rendering = models.render_image(model, accelerator,
-                                                test_batch, False,
-                                                train_frac, config)
+                # render a single image with all distributed processes (no gradients)
+                # Reduce chunk size for evaluation to save memory
+                original_chunk_size = config.render_chunk_size
+                config.render_chunk_size = min(config.render_chunk_size, 4096)  # Much smaller chunks
+                
+                with torch.no_grad():
+                    rendering = models.render_image(model, accelerator,
+                                                    test_batch, False,
+                                                    train_frac, config)
+                
+                # Restore original chunk size
+                config.render_chunk_size = original_chunk_size
 
                 # move to numpy
                 rendering = tree_map(lambda x: x.detach().cpu().numpy(), rendering)
@@ -825,6 +848,19 @@ def main(unused_argv):
                                                      tb_process_fn(test_batch['normals']) / 2. + 0.5, step)
                         for k, v in vis_suite.items():
                             summary_writer.add_image('test_output_' + k, tb_process_fn(v), step)
+
+                # Restore training mode and aggressive cleanup after evaluation
+                model.train()
+                
+                # Clear any tensors from evaluation
+                del rendering, test_batch
+                
+                # Force garbage collection and cache cleanup
+                import gc
+                gc.collect()
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                torch.cuda.empty_cache()
 
     if accelerator.is_main_process and config.max_steps > init_step:
         logger.info('Saving last checkpoint at step {} to {}'.format(step, config.checkpoint_dir))

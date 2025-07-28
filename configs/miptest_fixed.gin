@@ -1,0 +1,86 @@
+# Fixed miptest.gin - High Quality 360° Scene Configuration
+# This fixes all the critical issues that were causing low PSNR
+
+# Base configuration
+Config.comment = 'miptest_fixed'
+Config.exp_name = 'test'
+Config.dataset_loader = 'llff'
+
+# Camera and scene settings
+Config.near = 0.2
+Config.far = 1e6 
+Config.factor = 4  # FIXED: Changed from 2 to 4 (proper downsampling)
+Config.use_tiffs = False
+Config.eval_only_once = False
+Config.eval_quantize_metrics = True
+Config.eval_crop_borders = 8
+
+# Model configuration
+Model.raydist_fn = 'power_transformation'
+Model.opaque_background = True
+
+# MLP settings - FIXED: Enable density normals for quality
+PropMLP.disable_density_normals = True  # Keep disabled for proposals
+PropMLP.disable_rgb = True  # Keep disabled for proposals
+PropMLP.grid_level_dim = 1
+
+NerfMLP.disable_density_normals = False  # FIXED: Enable for quality
+NerfMLP.grid_level_dim = 4
+
+# Grid encoder settings (paper defaults)
+NerfMLP.grid_num_levels = 10
+NerfMLP.grid_level_interval = 2
+NerfMLP.grid_base_resolution = 16
+NerfMLP.grid_disired_resolution = 8192
+NerfMLP.grid_log2_hashmap_size = 21
+
+# Training settings - FIXED: Use paper defaults
+Config.max_steps = 25000
+Config.lr_init = 0.01  # FIXED: Changed from 0.02 to 0.01
+Config.lr_final = 0.001  # FIXED: Changed from 0.002 to 0.001
+Config.lr_delay_steps = 5000  # FIXED: Changed from 500 to 5000
+Config.batch_size = 65536  # FIXED: Changed from 4096 to 65536 (paper default)
+Config.checkpoint_every = 1000
+
+# Loss configuration - FIXED: Use Charbonnier loss
+Config.data_loss_type = 'charb'  # FIXED: Changed from 'mse' to 'charb'
+Config.charb_padding = 0.001
+Config.data_loss_mult = 1.0
+Config.data_coarse_loss_mult = 0.0
+Config.interlevel_loss_mult = 0.0
+Config.anti_interlevel_loss_mult = 0.01
+
+# Regularization - FIXED: Use proper hash decay
+Config.hash_decay_mults = 0.1  # FIXED: Changed from 10 to 0.1
+Config.distortion_loss_mult = 0.005
+
+# Confidence field configuration (disabled for standard training)
+Config.use_potential = False
+Config.confidence_grid_resolution = (128, 128, 128)
+Config.confidence_reg_mult = 0.0
+Config.use_admm_pruner = False
+Config.admm_sparsity_constraint = 0.01 
+Config.gating = False
+Config.contraction_aware_gradients = True
+Config.confidence_distortion_loss_mult = 0.005
+Config.multiscale = False
+Config.multiscale_levels = 2
+
+# No confidence grid loading - train from scratch
+Config.freeze_debug_confidence = False
+Config.binary_occupancy = False
+Config.analytical_gradient = False
+
+# Hash grid settings
+Config.use_triplane = False
+
+# Default data configuration
+Config.data_dir = "/home/nilkel/Projects/data/mip_360/bicycle"
+
+# Logging and evaluation
+Config.print_every = 100
+Config.train_render_every = 500
+Config.use_wandb = True
+Config.wandb_project = "mip360exps"
+Config.wandb_tags = ['mip', 'fixed', 'grid_encoder', 'bicycle']
+Config.wandb_notes = 'Fixed miptest config with proper settings for high quality' 

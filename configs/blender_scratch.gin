@@ -1,10 +1,17 @@
-# Blender Dataset P_ENCODER Testing Configuration  
-# This config tests the potential grid method on the blender lego dataset
-# with positional encoding disabled and unfrozen confidence training
 
 # Base configuration
-Config.comment = '64conf'
+Config.comment = '64bincf'
 Config.dataset_loader = 'blender'
+
+# POTENTIAL GRID CONFIGURATION AND TRIPLANES
+Config.use_potential = True  # Use tensor potential encoding G · ∇occupancy
+Config.use_triplane = True  # Enable triplane blending with hashgrid
+Config.confidence_grid_resolution = (64, 64, 64)
+Config.confidence_reg_mult = 0.0
+Config.use_admm_pruner = False
+Config.admm_sparsity_constraint = 0.04
+
+Config.binary_occupancy = True
 
 # Default data configuration - can be overridden
 Config.data_dir = "/home/nilkel/Projects/data/nerf_synthetic/lego"
@@ -16,28 +23,9 @@ Config.factor = 0  # Downsample to 200x200 for faster testing
 Config.use_tiffs = False
 Config.eval_only_once = False
 Config.eval_quantize_metrics = True
-Config.eval_crop_borders = 8
 
-# POTENTIAL GRID CONFIGURATION
-# Disable positional encoder, use grid encoder with potential method
 
-# Disable positional encoder for both NerfMLP and PropMLP
-NerfMLP.use_positional_encoder = False
-NerfMLP.pos_enc_num_freqs = 10
-NerfMLP.pos_enc_log_sampling = True
-NerfMLP.feature_mlp_hidden_dim = 64
-NerfMLP.feature_mlp_num_layers = 2
 
-PropMLP.use_positional_encoder = False
-PropMLP.pos_enc_num_freqs = 10
-PropMLP.pos_enc_log_sampling = True
-PropMLP.feature_mlp_hidden_dim = 64
-PropMLP.feature_mlp_num_layers = 2
-
-# Confidence field configuration (required for potential grid method)
-Config.use_potential = True  # Use tensor potential encoding G · ∇occupancy
-Config.confidence_grid_resolution = (64, 64, 64)
-Config.confidence_reg_mult = 0.0
 
 # No confidence grid loading - train from scratch
 # Config.debug_confidence_grid_path = ''  # Disabled
@@ -47,11 +35,11 @@ Config.analytical_gradient = False  # Use analytical gradients for better accura
 
 # Training settings - fast testing
 Config.max_steps = 25000
-Config.lr_init = 0.02
-Config.lr_final = 0.002
-Config.lr_delay_steps = 500
+# Config.lr_init = 0.02
+# Config.lr_final = 0.002
+# Config.lr_delay_steps = 500
 Config.batch_size = 8192
-Config.checkpoint_every = 1000
+Config.checkpoint_every = 10000
 
 # Model configuration - simplified for testing
 Model.raydist_fn = None
@@ -63,15 +51,14 @@ PropMLP.disable_rgb = True
 PropMLP.grid_level_dim = 1
 
 NerfMLP.disable_density_normals = True
-NerfMLP.grid_level_dim = 4  # Grid encoder level dimension
 
 # Hash grid settings
 Config.hash_decay_mults = 10
-Config.use_triplane = False  # Enable triplane blending with hashgrid
+
 
 # Loss configuration
-Config.data_loss_type = 'mse'  # Use MSE for cleaner gradients
-Config.data_loss_mult = 1.0
+# Config.data_loss_type = 'mse'  # Use MSE for cleaner gradients
+# Config.data_loss_mult = 1.0
 
 
 # Logging and evaluation

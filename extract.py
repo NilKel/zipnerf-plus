@@ -292,9 +292,7 @@ def main(unused_argv):
     config = configs.load_config()
     config.compute_visibility = True
 
-    config.exp_path = os.path.join("exp", config.exp_name)
-    config.mesh_path = os.path.join("exp", config.exp_name, "mesh")
-    config.checkpoint_dir = os.path.join(config.exp_path, 'checkpoints')
+    # exp_path, checkpoint_dir, render_dir, and mesh_path are now set in config.__post_init__
     os.makedirs(config.mesh_path, exist_ok=True)
 
     # accelerator for DDP

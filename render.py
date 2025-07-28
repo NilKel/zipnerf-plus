@@ -79,9 +79,7 @@ def create_videos(config, base_dir, out_dir, out_name, num_frames):
 
 def main(unused_argv):
     config = configs.load_config()
-    config.exp_path = os.path.join('exp', config.exp_name)
-    config.checkpoint_dir = os.path.join(config.exp_path, 'checkpoints')
-    config.render_dir = os.path.join(config.exp_path, 'render')
+    # exp_path, checkpoint_dir, render_dir, and mesh_path are now set in config.__post_init__
 
     accelerator = accelerate.Accelerator()
     # setup logger

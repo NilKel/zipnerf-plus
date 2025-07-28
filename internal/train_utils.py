@@ -82,7 +82,14 @@ def compute_data_loss(batch, renderings, config):
     for rendering in renderings:
         resid_sq = (rendering['rgb'] - batch['rgb'][..., :3]) ** 2
         denom = lossmult.sum()
-        stats['mses'].append(((lossmult * resid_sq).sum() / denom).item())
+        
+        # Store weighted MSE for loss computation
+        weighted_mse = ((lossmult * resid_sq).sum() / denom).item()
+        
+        # Store unweighted MSE for accurate PSNR calculation
+        unweighted_mse = resid_sq.mean().item()
+        stats['mses'].append(unweighted_mse)  # Use unweighted MSE for PSNR
+        stats['weighted_mses'].append(weighted_mse)  # Store weighted MSE separately
 
         if config.data_loss_type == 'mse':
             # Mean-squared error (L2) loss.

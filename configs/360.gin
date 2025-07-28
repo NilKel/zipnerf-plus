@@ -3,6 +3,16 @@ Config.dataset_loader = 'llff'
 Config.near = 0.2
 Config.far = 1e6
 Config.factor = 4
+Config.comment = '32cf_005dist'
+Config.batch_size = 8196
+Config.max_steps = 25000
+Config.use_potential = True
+Config.binary_occupancy = False
+Config.confidence_grid_resolution = (32, 32, 32)
+Config.confidence_distortion_loss_mult = 0.005
+
+# Default data configuration - can be overridden
+Config.data_dir = "/home/nilkel/Projects/data/mip_360/bicycle"
 
 Model.raydist_fn = 'power_transformation'
 Model.opaque_background = True
@@ -13,3 +23,10 @@ PropMLP.grid_level_dim = 1
 
 NerfMLP.disable_density_normals = True
 
+# Logging and evaluation
+Config.print_every = 100
+Config.train_render_every = 500
+Config.use_wandb = True
+Config.wandb_project = "mip360exps"
+Config.wandb_tags = ['mip', 'potential_grid', 'grid_encoder', 'bicycle']
+Config.wandb_notes = 'Testing potential grid method with grid encoders on blender lego dataset'
