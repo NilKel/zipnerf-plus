@@ -227,7 +227,7 @@ class ConfidenceField(nn.Module):
         else:
             # Original smooth sigmoid implementation
             # (D, H, W) -> (1, 1, D, H, W)
-            conf = self.get_confidence().unsqueeze(0).unsqueeze(0)
+            conf = self.get_confidence().unsqueeze(0).unsqueeze(0) # Sigmoidal values
             self.binary_c_grid = None  # Not used in smooth mode
 
             # Manually pad and then convolve, as padding_mode is not supported with tuple-based padding in this PyTorch version.

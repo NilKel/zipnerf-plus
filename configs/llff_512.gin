@@ -2,8 +2,15 @@ Config.dataset_loader = 'llff'
 Config.near = 0.
 Config.far = 1.
 Config.factor = 4
-Config.forward_facing = True
+Config.forward_facing = False
 Config.adam_eps = 1e-8
+Config.batch_size = 4096
+Config.max_steps = 25000
+Config.use_wandb = True
+Config.wandb_project = "mip360exps"
+Config.comment = 'baselinetry'
+Config.exp_name = 'test'
+
 
 Model.opaque_background = True
 Model.num_levels = 2
@@ -17,3 +24,7 @@ NerfMLP.disable_density_normals = True
 
 NerfMLP.max_deg_point = 16
 PropMLP.max_deg_point = 16
+
+Config.data_dir = "/home/nkelkar/Projects/data/mip_360/bicycle"
+
+Model.raydist_fn = 'power_transformation' # Added to align with miptest.gin

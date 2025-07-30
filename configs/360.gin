@@ -3,7 +3,14 @@ Config.dataset_loader = 'llff'
 Config.near = 0.2
 Config.far = 1e6
 Config.factor = 4
-
+Config.comment = '005thresh_32cf_nodist'
+Config.use_potential = True
+Config.use_triplane = False
+Config.binary_occupancy = False
+Config.confidence_grid_resolution = (32, 32, 32)
+Config.confidence_distortion_loss_mult = 0.00
+Config.batch_size = 32768
+Config.max_steps = 25000
 Model.raydist_fn = 'power_transformation'
 Model.opaque_background = True
 
@@ -13,3 +20,19 @@ PropMLP.grid_level_dim = 1
 
 NerfMLP.disable_density_normals = True
 
+# Default data configuration - can be overridden
+Config.data_dir = "/home/nkelkar/Projects/data/mip_360/bicycle"
+
+ # Logging and evaluation
+Config.print_every = 100
+Config.train_render_every = 500
+Config.use_wandb = True
+Config.wandb_project = "mip360exps"
+Config.wandb_tags = ['mip', 'potential_grid', 'grid_encoder', 'bicycle']
+Config.wandb_notes = 'Testing potential grid method with grid encoders on blender lego dataset'
+
+# Log test image every 1000 steps (default)
+Config.wandb_log_images_every = 1000
+
+# Log image at index 1, which corresponds to render_001.png (default)
+Config.wandb_log_image_index = 1

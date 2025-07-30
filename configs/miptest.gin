@@ -3,15 +3,14 @@
     # with positional encoding disabled and unfrozen confidence training
 
     # Base configuration
-    Config.comment = 'multiscale'
+    Config.comment = 'direct'
     Config.exp_name = 'test'
     Config.dataset_loader = 'llff'
-    # Config.data_dir - uses default blender dataset path
 
     # Camera and scene settings
     Config.near = 0.2
     Config.far = 1e6 
-    Config.factor = 8  # Downsample to 200x200 for faster testing
+    Config.factor = 4  # Downsample to 200x200 for faster testing
     Config.use_tiffs = False
     Config.eval_only_once = False
     Config.eval_quantize_metrics = True
@@ -34,7 +33,7 @@
     PropMLP.feature_mlp_num_layers = 2
 
     # Confidence field configuration (required for potential grid method)
-    Config.use_potential = False  # Use tensor potential encoding G · ∇occupancy
+    Config.use_potential = True  # Use tensor potential encoding G · ∇occupancy
     Config.confidence_grid_resolution = (32, 32, 32)
     Config.confidence_reg_mult = 0.0
     Config.use_admm_pruner = False
@@ -42,8 +41,8 @@
     Config.gating = False
     Config.contraction_aware_gradients = False
     Config.confidence_distortion_loss_mult = 0.005
-    Config.multiscale = True
-    Config.multiscale_levels = 2
+    Config.multiscale = False
+    Config.multiscale_levels = 4
 
     # No confidence grid loading - train from scratch
     # Config.debug_confidence_grid_path = ''  # Disabled
@@ -62,7 +61,9 @@
     # Model configuration - simplified for testing
     Model.raydist_fn = 'power_transformation'
     Model.opaque_background = True
-    
+    Model.num_levels = 2
+    Model.num_prop_samples = 128
+    Model.num_nerf_samples = 32
 
     # MLP settings - disable density normals for speed
     PropMLP.disable_density_normals = True
@@ -81,13 +82,17 @@
     Config.data_loss_mult = 1.0
 
     # Default data configuration - can be overridden
-    Config.data_dir = "/home/nilkel/Projects/data/mip_360/bicycle"
+    Config.data_dir = "/home/nkelkar/Projects/data/mip_360/bicycle"
 
     # Logging and evaluation
-    Config.print_every = 100
-    Config.train_render_every = 500
-    Config.use_wandb = True
-    Config.wandb_project = "mip360exps"
-    Config.wandb_tags = ['mip', 'potential_grid', 'grid_encoder', 'bicycle']
-    Config.wandb_notes = 'Testing potential grid method with grid encoders on blender lego dataset'
+Config.print_every = 100
+Config.train_render_every = 500
+Config.use_wandb = True
+Config.wandb_project = "mip360exps"
+Config.wandb_tags = ['mip', 'potential_grid', 'grid_encoder', 'bicycle']
+Config.wandb_notes = 'Testing potential grid method with grid encoders on blender lego dataset'
+Config.wandb_log_images_every = 1000  # Log specific test image to wandb every 1000 steps
+Config.wandb_log_image_index = 1      # Log test image at index 1 (corresponds to render_001.png)
 
+    NerfMLP.max_deg_point = 16
+    PropMLP.max_deg_point = 16

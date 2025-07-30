@@ -1,0 +1,117 @@
+# High-Quality 360° Scene Configuration for Zip-NeRF
+# This config reproduces the paper results for 360° scenes like bicycle
+
+# =============================================================================
+# DATASET AND SCENE CONFIGURATION
+# =============================================================================
+Config.dataset_loader = 'llff'
+Config.data_dir = "/path/to/your/data/bicycle"  # CHANGE THIS TO YOUR DATASET PATH
+Config.factor = 4  # Use 4x downsampled images (original resolution / 4)
+Config.forward_facing = False  # 360° scenes are not forward-facing
+Config.near = 0.2
+Config.far = 1e6
+
+# =============================================================================
+# MODEL ARCHITECTURE (Paper Defaults)
+# =============================================================================
+# Sampling configuration - CRITICAL for quality
+Model.num_levels = 3  # 2 proposal levels + 1 nerf level
+Model.num_prop_samples = 64  # Samples per proposal level
+Model.num_nerf_samples = 32  # Samples for final nerf level
+Model.raydist_fn = 'power_transformation'
+Model.opaque_background = True
+
+# =============================================================================
+# MLP CONFIGURATION (Paper Defaults)
+# =============================================================================
+# NerfMLP - Main rendering network
+NerfMLP.bottleneck_width = 256
+NerfMLP.net_depth_viewdirs = 2
+NerfMLP.net_width_viewdirs = 256
+NerfMLP.deg_view = 4
+NerfMLP.density_bias = -1.
+NerfMLP.rgb_padding = 0.001
+NerfMLP.disable_density_normals = False  # Enable normal prediction for quality
+NerfMLP.disable_rgb = False  # Enable RGB prediction
+
+# Grid encoder settings (Zip-NeRF defaults)
+NerfMLP.grid_num_levels = 10
+NerfMLP.grid_level_interval = 2
+NerfMLP.grid_level_dim = 4
+NerfMLP.grid_base_resolution = 16
+NerfMLP.grid_disired_resolution = 8192
+NerfMLP.grid_log2_hashmap_size = 21
+
+# PropMLP - Proposal networks (simplified for speed)
+PropMLP.disable_density_normals = True  # Disable for proposal networks
+PropMLP.disable_rgb = True  # Disable for proposal networks
+PropMLP.grid_level_dim = 1  # Smaller for proposal networks
+PropMLP.grid_num_levels = 10
+PropMLP.grid_level_interval = 2
+PropMLP.grid_base_resolution = 16
+PropMLP.grid_disired_resolution = 512  # Smaller for proposals
+PropMLP.grid_log2_hashmap_size = 21
+
+# =============================================================================
+# TRAINING CONFIGURATION (Paper Defaults)
+# =============================================================================
+Config.max_steps = 25000
+Config.batch_size = 2 ** 16  # 65536 rays per batch (paper default)
+Config.lr_init = 0.01
+Config.lr_final = 0.001
+Config.lr_delay_steps = 5000
+Config.lr_delay_mult = 1e-8
+
+# Loss configuration - CRITICAL for quality
+Config.data_loss_type = 'charb'  # Charbonnier loss (paper default)
+Config.charb_padding = 0.001
+Config.data_loss_mult = 1.0
+Config.data_coarse_loss_mult = 0.0
+Config.interlevel_loss_mult = 0.0
+Config.anti_interlevel_loss_mult = 0.01
+Config.pulse_width = [0.03, 0.003]
+
+# Regularization
+Config.hash_decay_mults = 0.1
+Config.distortion_loss_mult = 0.005
+
+# =============================================================================
+# MULTISCALE TRAINING (Optional - for better quality)
+# =============================================================================
+Config.multiscale = True
+Config.multiscale_levels = 4  # Use 4 multiscale levels
+
+# =============================================================================
+# CONFIDENCE FIELD (Your Custom Features)
+# =============================================================================
+# Disable confidence field for standard Zip-NeRF
+Config.use_potential = False
+Config.confidence_grid_resolution = (128, 128, 128)
+Config.confidence_reg_mult = 0.0
+Config.use_admm_pruner = False
+Config.confidence_distortion_loss_mult = 0.005
+Config.contraction_aware_gradients = True
+Config.binary_occupancy = False
+Config.analytical_gradient = False
+
+# =============================================================================
+# EVALUATION AND LOGGING
+# =============================================================================
+Config.print_every = 100
+Config.train_render_every = 500
+Config.checkpoint_every = 5000
+Config.eval_only_once = False
+Config.eval_quantize_metrics = True
+Config.eval_crop_borders = 8
+
+# Weights & Biases logging
+Config.use_wandb = True
+Config.wandb_project = "mip360exps"
+Config.wandb_tags = ['zipnerf', '360', 'high_quality']
+Config.wandb_notes = 'High-quality 360° scene training with paper defaults'
+
+# =============================================================================
+# EXPERIMENT NAMING
+# =============================================================================
+Config.exp_name = "high_quality_360"
+Config.comment = "paper_defaults_360" 

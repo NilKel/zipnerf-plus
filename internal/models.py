@@ -1026,7 +1026,11 @@ class MLP(nn.Module):
             #     # and sampled_grad is computed from sigmoid confidence
             #     features = sampled_conf.squeeze(-1) * dot_product
 
-            features = dot_product
+            if not self.config.binary_occupancy:
+                features = ((sampled_conf > 0.05).detach() + (sampled_conf - sampled_conf.detach())).float().squeeze(-1) * dot_product
+                # straight through estimation for sampled conf occupancy.
+            else:
+                features = dot_product
             
             if not use_triplane:
                 # The shape is now (..., num_levels, level_dim)

@@ -804,6 +804,104 @@ def main(unused_argv):
                         # Log to wandb
                         wandb.log(eval_wandb_log, step=step)
                     
+                    # Additional wandb image logging for specific test image
+                    if (config.use_wandb and accelerator.is_main_process and 
+                        step % config.wandb_log_images_every == 0):
+                        
+                        # Render a specific test image for wandb logging
+                        try:
+                            # Get the specific test image we want to log
+                            if config.wandb_log_image_index < len(test_dataset.images):
+                                # Get the full image sample for the specified index
+                                test_sample = test_dataset[config.wandb_log_image_index]
+                                
+                                # Convert to proper batch format for render_image
+                                wandb_test_batch = {}
+                                for key, value in test_sample.items():
+                                    if value is not None:
+                                        if isinstance(value, np.ndarray):
+                                            wandb_test_batch[key] = torch.from_numpy(value).to(accelerator.device)
+                                        else:
+                                            wandb_test_batch[key] = value.to(accelerator.device) if hasattr(value, 'to') else value
+                                
+                                # Ensure proper image dimensions for rendering
+                                if 'origins' in wandb_test_batch:
+                                    origins_shape = wandb_test_batch['origins'].shape
+                                    if len(origins_shape) == 2:  # Missing batch dimension
+                                        for key in wandb_test_batch:
+                                            if wandb_test_batch[key] is not None and hasattr(wandb_test_batch[key], 'unsqueeze'):
+                                                wandb_test_batch[key] = wandb_test_batch[key].unsqueeze(0)
+                                
+                                # Render the specific image
+                                wandb_rendering = models.render_image(model, accelerator, wandb_test_batch, False, train_frac, config, verbose=False)
+                                
+                                # Convert to numpy and postprocess
+                                wandb_rendering = tree_map(lambda x: x.detach().cpu().numpy(), wandb_rendering)
+                                wandb_test_batch = tree_map(lambda x: x.detach().cpu().numpy() if x is not None else None, wandb_test_batch)
+                                
+                                # Ensure proper image shapes
+                                wandb_rendered_rgb = postprocess_fn(wandb_rendering['rgb'])
+                                if len(wandb_rendered_rgb.shape) == 4 and wandb_rendered_rgb.shape[0] == 1:
+                                    wandb_rendered_rgb = wandb_rendered_rgb.squeeze(0)  # Remove batch dimension
+                                
+                                # Create wandb log dictionary for specific image
+                                wandb_specific_log = {}
+                                
+                                # Log the rendered image
+                                wandb_specific_log['train_render/rendered_image'] = wandb.Image(
+                                    wandb_rendered_rgb, caption=f"Rendered Test Image {config.wandb_log_image_index:03d} - Step {step}"
+                                )
+                                
+                                # Log ground truth if available
+                                if wandb_test_batch['rgb'] is not None:
+                                    wandb_gt_rgb = postprocess_fn(wandb_test_batch['rgb'])
+                                    if len(wandb_gt_rgb.shape) == 4 and wandb_gt_rgb.shape[0] == 1:
+                                        wandb_gt_rgb = wandb_gt_rgb.squeeze(0)  # Remove batch dimension
+                                    
+                                    wandb_specific_log['train_render/ground_truth'] = wandb.Image(
+                                        wandb_gt_rgb, caption=f"Ground Truth {config.wandb_log_image_index:03d} - Step {step}"
+                                    )
+                                    
+                                    # Compute and log metrics for this specific image
+                                    wandb_metric = metric_harness(wandb_rendered_rgb, wandb_gt_rgb)
+                                    for name, val in wandb_metric.items():
+                                        if not np.isnan(val):
+                                            wandb_specific_log[f'train_render_metrics/{name}'] = val
+                                    
+                                    # Create residual image
+                                    residual = np.clip(wandb_rendered_rgb - wandb_gt_rgb + 0.5, 0, 1)
+                                    wandb_specific_log['train_render/residual'] = wandb.Image(
+                                        residual, caption=f"Residual {config.wandb_log_image_index:03d} - Step {step}"
+                                    )
+                                
+                                # Log additional rendering outputs if available
+                                if 'distance_mean' in wandb_rendering:
+                                    depth_img = wandb_rendering['distance_mean']
+                                    if len(depth_img.shape) == 4 and depth_img.shape[0] == 1:
+                                        depth_img = depth_img.squeeze(0)
+                                    if len(depth_img.shape) == 3 and depth_img.shape[-1] == 1:
+                                        depth_img = depth_img.squeeze(-1)
+                                    
+                                    # Normalize depth for visualization
+                                    depth_norm = (depth_img - depth_img.min()) / (depth_img.max() - depth_img.min() + 1e-8)
+                                    wandb_specific_log['train_render/depth'] = wandb.Image(
+                                        depth_norm, caption=f"Depth {config.wandb_log_image_index:03d} - Step {step}"
+                                    )
+                                
+                                # Log to wandb
+                                wandb.log(wandb_specific_log, step=step)
+                                
+                                                                 # Optional: Save the image to disk as well
+                                 save_dir = os.path.join(config.exp_path, 'renders', 'debug')
+                                 os.makedirs(save_dir, exist_ok=True)
+                                 save_path = os.path.join(save_dir, f'render_{config.wandb_log_image_index:03d}_step_{step:06d}.png')
+                                 utils.save_img_u8(wandb_rendered_rgb, save_path)
+                                
+                                logger.info(f'Logged test image {config.wandb_log_image_index:03d} to wandb at step {step}')
+                                
+                        except Exception as e:
+                            logger.warning(f'Failed to log specific test image to wandb at step {step}: {e}')
+                    
                     # Tensorboard image logging
                     if summary_writer is not None:
                         if config.rawnerf_mode:

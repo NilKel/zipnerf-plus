@@ -100,13 +100,15 @@ class Config:
     wandb_tags: List[str] = None  # WandB run tags
     wandb_notes: Optional[str] = None  # WandB run notes
     disable_tensorboard: bool = False  # If True, disable tensorboard logging
+    wandb_log_images_every: int = 1000  # Log rendered images to wandb every N steps
+    wandb_log_image_index: int = 1  # Index of the test image to log (0-based, so 1 = render_001.png)
 
     dpcpp_backend: bool = False  # If True, use DPC++ for the backend.
     importance_sampling: bool = False # If True, use CUDA or DPC++ implementation
     # of importance ray sampling from nerfacc
 
     # Only used by train.py:
-    max_steps: int = 25000  # The number of optimization steps.
+    max_steps: int = 50000  # The number of optimization steps.
     early_exit_steps: Optional[int] = None  # Early stopping, for debugging.
     checkpoint_every: int = 5000  # The number of steps to save a checkpoint.
     resume_from_checkpoint: bool = True  # whether to resume from checkpoint.
