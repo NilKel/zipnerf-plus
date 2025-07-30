@@ -55,9 +55,7 @@ def summarize_results(folder, scene_names, num_buckets):
 
 def main(unused_argv):
     config = configs.load_config()
-    config.exp_path = os.path.join('exp', config.exp_name)
-    config.checkpoint_dir = os.path.join(config.exp_path, 'checkpoints')
-    config.render_dir = os.path.join(config.exp_path, 'render')
+    # exp_path, checkpoint_dir, render_dir, and mesh_path are now set in config.__post_init__
 
     accelerator = accelerate.Accelerator()
 

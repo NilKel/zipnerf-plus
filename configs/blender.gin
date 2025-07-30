@@ -3,14 +3,16 @@
 # with positional encoding disabled and unfrozen confidence training
 
 # Base configuration
-Config.exp_name = 'blender_potential_grid_test_moresamp_4thorder_64resmb'
+Config.comment = '64conf'
 Config.dataset_loader = 'blender'
-# Config.data_dir - uses default blender dataset path
+
+# Default data configuration - can be overridden
+Config.data_dir = "/home/nilkel/Projects/data/nerf_synthetic/lego"
 
 # Camera and scene settings
 Config.near = 2.0
 Config.far = 6.0
-Config.factor = 4  # Downsample to 200x200 for faster testing
+Config.factor = 0  # Downsample to 200x200 for faster testing
 Config.use_tiffs = False
 Config.eval_only_once = False
 Config.eval_quantize_metrics = True
@@ -71,15 +73,12 @@ Config.use_triplane = False  # Enable triplane blending with hashgrid
 Config.data_loss_type = 'mse'  # Use MSE for cleaner gradients
 Config.data_loss_mult = 1.0
 
-# Default data configuration - can be overridden
-Config.data_dir = "/home/nilkel/Projects/data/nerf_synthetic/lego"
 
 # Logging and evaluation
 Config.print_every = 100
 Config.train_render_every = 500
 Config.use_wandb = True
-Config.wandb_project = "my-nerf-experiments"
-Config.wandb_name = "blender_potential_grid_test_moresamp_4thorder_128resmb"
+Config.wandb_project = "Blender"
 Config.wandb_tags = ['blender', 'potential_grid', 'grid_encoder', 'lego']
 Config.wandb_notes = 'Testing potential grid method with grid encoders on blender lego dataset'
 

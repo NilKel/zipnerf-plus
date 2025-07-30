@@ -150,7 +150,7 @@ class Config:
     grad_max_norm: float = 0.  # Gradient clipping magnitude, disabled if == 0.
     grad_max_val: float = 0.  # Gradient clipping value, disabled if == 0.
     distortion_loss_mult: float = 0.005  # Multiplier on the distortion loss.
-    confidence_distortion_loss_mult: float = 0.005  # Multiplier on the confidence distortion loss.
+    confidence_distortion_loss_mult: float = 0.0  # Multiplier on the confidence distortion loss.
     opacity_loss_mult: float = 0.  # Multiplier on the distortion loss.
 
     # Only used by eval.py:
@@ -223,8 +223,12 @@ class Config:
     
     def __post_init__(self):
         """Auto-generate experiment names and adjust settings based on configuration."""
-        # Extract scene name from data_dir
+        # Extract scene name and dataset name from data_dir
         scene_name = os.path.basename(self.data_dir.rstrip('/'))
+        
+        # Extract dataset name by going one level up
+        dataset_path = os.path.dirname(self.data_dir.rstrip('/'))
+        dataset_name = os.path.basename(dataset_path.rstrip('/'))
         
         # Determine model type suffix
         if self.use_potential and self.use_triplane:
@@ -255,6 +259,12 @@ class Config:
         # Set wandb_name if not explicitly set
         if self.wandb_name is None:
             self.wandb_name = self.exp_name
+            
+        # Create hierarchical experiment path: dataset/scene_name/experiment
+        self.exp_path = os.path.join("exp", dataset_name, scene_name, self.exp_name)
+        self.checkpoint_dir = os.path.join(self.exp_path, 'checkpoints')
+        self.render_dir = os.path.join(self.exp_path, 'render')
+        self.mesh_path = os.path.join(self.exp_path, 'mesh')
             
         # Adjust batch size for potential encoder if memory constrained
         if self.use_potential and self.use_triplane and self.batch_size > 4096:

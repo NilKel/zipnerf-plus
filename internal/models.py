@@ -1027,7 +1027,11 @@ class MLP(nn.Module):
             #     features = sampled_conf.squeeze(-1) * dot_product
 
             if not self.config.binary_occupancy:
+<<<<<<< HEAD
                 features = ((sampled_conf > 0.05).detach() + (sampled_conf - sampled_conf.detach())).float().squeeze(-1) * dot_product
+=======
+                features = ((sampled_conf > 0.5).detach() + (sampled_conf - sampled_conf.detach())).float().squeeze(-1) * dot_product
+>>>>>>> 9d833a1525808f91f481f231bab1fc0e0d78b3f0
                 # straight through estimation for sampled conf occupancy.
             else:
                 features = dot_product

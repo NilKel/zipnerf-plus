@@ -33,7 +33,7 @@ do
   --gin_bindings="Config.render_path = True" \
   --gin_bindings="Config.render_path_frames = 120" \
   --gin_bindings="Config.render_video_fps = 30" \
-  --gin_bindings="Config.factor = 4"
+  --gin_bindings="Config.factor = 0" # Set factor to 0 for full resolution rendering
 
   accelerate launch extract.py \
   --gin_configs=configs/360.gin \

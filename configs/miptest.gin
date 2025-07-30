@@ -3,7 +3,11 @@
     # with positional encoding disabled and unfrozen confidence training
 
     # Base configuration
+<<<<<<< HEAD
     Config.comment = 'direct'
+=======
+    Config.comment = '32bincf_01dist'
+>>>>>>> 9d833a1525808f91f481f231bab1fc0e0d78b3f0
     Config.exp_name = 'test'
     Config.dataset_loader = 'llff'
 
@@ -35,23 +39,29 @@
     # Confidence field configuration (required for potential grid method)
     Config.use_potential = True  # Use tensor potential encoding G · ∇occupancy
     Config.confidence_grid_resolution = (32, 32, 32)
+    Config.binary_occupancy = True
     Config.confidence_reg_mult = 0.0
     Config.use_admm_pruner = False
     Config.admm_sparsity_constraint = 0.01 
     Config.gating = False
     Config.contraction_aware_gradients = False
+<<<<<<< HEAD
     Config.confidence_distortion_loss_mult = 0.005
     Config.multiscale = False
     Config.multiscale_levels = 4
+=======
+    Config.confidence_distortion_loss_mult = 0.01
+    Config.multiscale = False
+    Config.multiscale_levels = 2
+>>>>>>> 9d833a1525808f91f481f231bab1fc0e0d78b3f0
 
     # No confidence grid loading - train from scratch
     # Config.debug_confidence_grid_path = ''  # Disabled
     Config.freeze_debug_confidence = False  # Unfreeze confidence training
-    Config.binary_occupancy = False  # Use smooth sigmoid occupancy
     Config.analytical_gradient = False  # Use analytical gradients for better accuracy
 
     # Training settings - fast testing
-    Config.max_steps = 25000
+    Config.max_steps = 200000
     Config.lr_init = 0.02
     Config.lr_final = 0.002
     Config.lr_delay_steps = 500

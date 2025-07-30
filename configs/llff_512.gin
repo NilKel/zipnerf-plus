@@ -10,6 +10,10 @@ Config.use_wandb = True
 Config.wandb_project = "mip360exps"
 Config.comment = 'baselinetry'
 Config.exp_name = 'test'
+<<<<<<< HEAD
+=======
+Config.factor = 4
+>>>>>>> 9d833a1525808f91f481f231bab1fc0e0d78b3f0
 
 
 Model.opaque_background = True
@@ -25,6 +29,10 @@ NerfMLP.disable_density_normals = True
 NerfMLP.max_deg_point = 16
 PropMLP.max_deg_point = 16
 
+<<<<<<< HEAD
 Config.data_dir = "/home/nkelkar/Projects/data/mip_360/bicycle"
+=======
+Config.data_dir = "/home/nilkel/Projects/data/mip_360/bicycle"
+>>>>>>> 9d833a1525808f91f481f231bab1fc0e0d78b3f0
 
 Model.raydist_fn = 'power_transformation' # Added to align with miptest.gin

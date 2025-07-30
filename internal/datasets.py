@@ -966,6 +966,11 @@ class Multicam(Dataset):
                 batch['alphas'] = self.alphas[cam_idx, pix_y_int, pix_x_int]
             for k, v in batch.items():
                 self.batches[k].append(v)
+<<<<<<< HEAD
+=======
+        
+
+>>>>>>> 9d833a1525808f91f481f231bab1fc0e0d78b3f0
 
     def _next_train(self, item):
         """Sample next training batch (random rays)."""
