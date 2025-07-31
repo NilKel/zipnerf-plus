@@ -915,11 +915,11 @@ def main(unused_argv):
                                 wandb.log(wandb_specific_log, step=step)
                                 
                                                                  # Optional: Save the image to disk as well
-                                 save_dir = os.path.join(config.exp_path, 'renders', 'debug')
-                                 os.makedirs(save_dir, exist_ok=True)
-                                 save_path = os.path.join(save_dir, f'render_{config.wandb_log_image_index:03d}_step_{step:06d}.png')
-                                 utils.save_img_u8(wandb_rendered_rgb, save_path)
-                                
+                                save_dir = os.path.join(config.exp_path, 'renders', 'debug')
+                                os.makedirs(save_dir, exist_ok=True)
+                                save_path = os.path.join(save_dir, f'render_{config.wandb_log_image_index:03d}_step_{step:06d}.png')
+                                utils.save_img_u8(wandb_rendered_rgb, save_path)
+                            
                                 logger.info(f'Logged test image {config.wandb_log_image_index:03d} to wandb at step {step}')
                                 
                         except Exception as e:

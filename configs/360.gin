@@ -3,12 +3,15 @@ Config.dataset_loader = 'llff'
 Config.near = 0.2
 Config.far = 1e6
 Config.factor = 4
-Config.comment = '005thresh_32cf_nodist'
+Config.comment = 'non_spherical_32cf'
 Config.use_potential = True
 Config.use_triplane = False
 Config.binary_occupancy = False
 Config.confidence_grid_resolution = (32, 32, 32)
 Config.confidence_distortion_loss_mult = 0.00
+
+Config.non_spherical_contraction = False
+
 Config.batch_size = 32768
 Config.max_steps = 25000
 Model.raydist_fn = 'power_transformation'

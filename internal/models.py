@@ -892,7 +892,8 @@ class MLP(nn.Module):
         
         # Encode input positions
         if self.warp_fn is not None and not no_warp:
-            means, stds = coord.track_linearize(self.warp_fn, means, stds)
+            use_cubic_contraction = self.config is not None and getattr(self.config, 'non_spherical_contraction', False)
+            means, stds = coord.track_linearize(self.warp_fn, means, stds, use_cubic_contraction=use_cubic_contraction)
             # contract [-2, 2] to [-1, 1]
             bound = 2
             means = means / bound
@@ -1027,11 +1028,7 @@ class MLP(nn.Module):
             #     features = sampled_conf.squeeze(-1) * dot_product
 
             if not self.config.binary_occupancy:
-<<<<<<< HEAD
                 features = ((sampled_conf > 0.05).detach() + (sampled_conf - sampled_conf.detach())).float().squeeze(-1) * dot_product
-=======
-                features = ((sampled_conf > 0.5).detach() + (sampled_conf - sampled_conf.detach())).float().squeeze(-1) * dot_product
->>>>>>> 9d833a1525808f91f481f231bab1fc0e0d78b3f0
                 # straight through estimation for sampled conf occupancy.
             else:
                 features = dot_product

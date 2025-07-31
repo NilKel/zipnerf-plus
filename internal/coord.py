@@ -72,8 +72,173 @@ def contract_mean_std(x, std):
     return z, std
 
 
+def contract_cubic(x):
+    """MeRF's cubic contraction function (Eq 7) - optimized version."""
+    eps = torch.finfo(x.dtype).eps
+    
+    # L∞ norm (max absolute coordinate) - optimized
+    abs_x = torch.abs(x)
+    x_norm_inf, max_indices = torch.max(abs_x, dim=-1, keepdim=True)
+    
+    # Early return for points inside unit cube (most common case)
+    mask_inside = x_norm_inf <= 1.0
+    if torch.all(mask_inside):
+        return x
+    
+    # For outside points, vectorized computation
+    x_norm_inf_safe = torch.clamp(x_norm_inf, min=eps)
+    
+    # Compute both transformations vectorized
+    # Non-max coords: x_j / ||x||∞
+    contracted_non_max = x / x_norm_inf_safe
+    
+    # Max coords: sign(x_j) * (2 - 1/|x_j|)
+    abs_x_safe = torch.clamp(abs_x, min=eps)
+    sign_x = torch.sign(x)
+    contracted_max = sign_x * (2.0 - 1.0 / abs_x_safe)
+    
+    # Create mask for max coordinates more efficiently
+    max_coord_mask = (abs_x == x_norm_inf) & (x_norm_inf > 1.0)
+    
+    # Combine using vectorized selection
+    contracted = torch.where(max_coord_mask, contracted_max, contracted_non_max)
+    
+    # Apply final mask for inside vs outside
+    result = torch.where(mask_inside, x, contracted)
+    return result
+
+
+def inv_contract_cubic(z):
+    """Inverse of MeRF's cubic contraction function."""
+    eps = torch.finfo(z.dtype).eps
+    
+    # L∞ norm in contracted space
+    z_norm_inf = torch.max(torch.abs(z), dim=-1, keepdim=True)[0]
+    
+    # Case 1: Inside unit cube ||z||∞ ≤ 1 (identity mapping)
+    mask_inside = z_norm_inf <= 1.0
+    
+    # Case 2: Outside unit cube ||z||∞ > 1
+    abs_z = torch.abs(z)
+    max_coord_mask = (abs_z == z_norm_inf) & (z_norm_inf > 1.0)
+    
+    # For coordinates that are NOT the max: solve x_j = z_j * ||x||∞
+    # We need to find ||x||∞ first from the max coordinate
+    
+    # For the max coordinate: solve z_j = sign(x_j) * (2 - 1/|x_j|)
+    # This gives us: |x_j| = 1 / (2 - |z_j|)
+    sign_z = torch.sign(z)
+    abs_z_clamped = torch.clamp(abs_z, min=eps, max=2.0-eps)  # Clamp to valid range
+    
+    # Solve for the max coordinate magnitude
+    x_max_mag = 1.0 / (2.0 - abs_z_clamped + eps)
+    
+    # Reconstruct the max coordinate
+    x_max = sign_z * x_max_mag
+    
+    # For non-max coordinates, use the relationship x_j = z_j * ||x||∞
+    # where ||x||∞ is the magnitude of the max coordinate
+    x_norm_inf_reconstructed = torch.where(max_coord_mask, x_max_mag, torch.zeros_like(x_max_mag))
+    x_norm_inf_reconstructed = torch.max(x_norm_inf_reconstructed, dim=-1, keepdim=True)[0]
+    
+    # Reconstruct non-max coordinates
+    x_non_max = z * x_norm_inf_reconstructed
+    
+    # Combine max and non-max coordinates
+    x_outside = torch.where(max_coord_mask, x_max, x_non_max)
+    
+    # Final result: identity inside, reconstructed outside
+    result = torch.where(mask_inside, z, x_outside)
+    return result
+
+
+def contract_cubic_mean_jacobi(x):
+    """MeRF's cubic contraction with Jacobian computation."""
+    eps = torch.finfo(x.dtype).eps
+    
+    # L∞ norm and setup
+    x_norm_inf = torch.max(torch.abs(x), dim=-1, keepdim=True)[0]
+    mask_inside = x_norm_inf <= 1.0
+    abs_x = torch.abs(x)
+    max_coord_mask = (abs_x == x_norm_inf) & (x_norm_inf > 1.0)
+    
+    # Contract the coordinates (same as contract_cubic)
+    contracted_non_max = x / (x_norm_inf + eps)
+    sign_x = torch.sign(x)
+    abs_x_clamped = torch.clamp(abs_x, min=eps)
+    contracted_max = sign_x * (2.0 - 1.0 / abs_x_clamped)
+    contracted_outside = torch.where(max_coord_mask, contracted_max, contracted_non_max)
+    z = torch.where(mask_inside, x, contracted_outside)
+    
+    # Compute Jacobian
+    device = x.device
+    eye = torch.eye(3, device=device).expand(*x.shape[:-1], 3, 3)
+    
+    # Inside unit cube: Jacobian is identity
+    jacobi = eye.clone()
+    
+    # Outside unit cube: compute Jacobian for each region
+    if not torch.all(mask_inside):
+        # This is a simplified Jacobian computation
+        # For the exact Jacobian, we'd need to handle each of the 7 regions separately
+        # For now, we'll use an approximation based on the dominant scaling
+        
+        # Approximate Jacobian scaling factor
+        # In regions where coordinate is not max: 1/||x||∞ 
+        # In regions where coordinate is max: 1/|x_j|²
+        scale_non_max = 1.0 / (x_norm_inf + eps)
+        scale_max = 1.0 / (abs_x_clamped ** 2 + eps)
+        
+        # Apply scaling to diagonal
+        scale_factor = torch.where(max_coord_mask, scale_max, scale_non_max)
+        jacobi_outside = eye * scale_factor.unsqueeze(-1)
+        
+        # Use outside Jacobian where needed
+        jacobi = torch.where(mask_inside.unsqueeze(-1), eye, jacobi_outside)
+    
+    return z, jacobi
+
+
+def contract_cubic_mean_std(x, std):
+    """MeRF's cubic contraction with std transformation - optimized version."""
+    eps = torch.finfo(x.dtype).eps
+    
+    # L∞ norm and early exit optimization
+    abs_x = torch.abs(x)
+    x_norm_inf = torch.max(abs_x, dim=-1, keepdim=True)[0]
+    mask_inside = x_norm_inf <= 1.0
+    
+    # Early return if all points inside (most common case)
+    if torch.all(mask_inside):
+        return x, std
+    
+    # Vectorized contraction computation (reuse optimized logic)
+    x_norm_inf_safe = torch.clamp(x_norm_inf, min=eps)
+    
+    # Non-max and max coordinate transformations
+    contracted_non_max = x / x_norm_inf_safe
+    abs_x_safe = torch.clamp(abs_x, min=eps)
+    sign_x = torch.sign(x)
+    contracted_max = sign_x * (2.0 - 1.0 / abs_x_safe)
+    
+    # Apply transformations
+    max_coord_mask = (abs_x == x_norm_inf) & (x_norm_inf > 1.0)
+    contracted = torch.where(max_coord_mask, contracted_max, contracted_non_max)
+    z = torch.where(mask_inside, x, contracted)
+    
+    # Optimized std transformation - simplified approximation
+    # Use average scaling for efficiency (good approximation for cubic contraction)
+    scale_factor = 1.0 / (x_norm_inf_safe + eps)
+    det_approx = scale_factor.squeeze(-1)  # Simplified determinant approximation
+    
+    # Apply std scaling only where needed
+    new_std = torch.where(mask_inside.squeeze(-1), std, det_approx * std)
+    
+    return z, new_std
+
+
 @torch.no_grad()
-def track_linearize(fn, mean, std):
+def track_linearize(fn, mean, std, use_cubic_contraction=False):
     """Apply function `fn` to a set of means and covariances, ala a Kalman filter.
 
   We can analytically transform a Gaussian parameterized by `mean` and `cov`
@@ -85,13 +250,17 @@ def track_linearize(fn, mean, std):
     fn: the function applied to the Gaussians parameterized by (mean, cov).
     mean: a tensor of means, where the last axis is the dimension.
     std: a tensor of covariances, where the last two axes are the dimensions.
+    use_cubic_contraction: if True, use MeRF's cubic contraction; if False, use mip-NeRF 360's spherical contraction.
 
   Returns:
     fn_mean: the transformed means.
     fn_cov: the transformed covariances.
   """
     if fn == 'contract':
-        fn = contract_mean_jacobi
+        if use_cubic_contraction:
+            fn = contract_cubic_mean_std
+        else:
+            fn = contract_mean_std
     else:
         raise NotImplementedError
 
@@ -109,7 +278,7 @@ def track_linearize(fn, mean, std):
     # torch.allclose(std_1, std_3, atol=1e-7)  # True
     # torch.allclose(mean_1, mean_3)  # True
     # import ipdb; ipdb.set_trace()
-    mean, std = contract_mean_std(mean, std)  # calculate det explicitly by using eigenvalues
+    mean, std = fn(mean, std)  # calculate det explicitly by using eigenvalues
 
     mean = mean.reshape(*pre_shape, 3)
     std = std.reshape(*pre_shape)

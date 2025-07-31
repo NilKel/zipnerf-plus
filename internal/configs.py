@@ -36,7 +36,7 @@ class Config:
     freeze_debug_confidence: bool = False  # If True, freeze the debug confidence grid (no gradients)
     
     # Confidence field gradient computation
-    contraction_aware_gradients: bool = True  # If True, account for spatial contraction in gradient computation
+    contraction_aware_gradients: bool = False  # If True, account for spatial contraction in gradient computation
     
     # ADMM Pruner settings for confidence field sparsity
     use_admm_pruner: bool = False  # If True, enable ADMM pruning for confidence field
@@ -46,6 +46,9 @@ class Config:
     admm_start_step: int = 1000  # Step to start ADMM pruning (allow initial training first)
     admm_log_every: int = 100  # Log ADMM metrics every N steps
     gating: bool = False
+    
+    # Spatial contraction settings
+    non_spherical_contraction: bool = False  # If True, use MeRF's cubic contraction instead of mip-NeRF 360's spherical contraction
     
     # Divergence regularization settings
     use_divergence_regularization: bool = False  # If True, enable divergence regularization
