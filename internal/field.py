@@ -456,8 +456,8 @@ class ConfidenceField(nn.Module):
             continuous_grid = self.get_confidence().unsqueeze(0).unsqueeze(0)  # (1, 1, D, H, W)
             
             # Sample from both grids
-            sampled_binary = F.grid_sample(binary_grid, points_for_grid_sample, align_corners=True, mode='bilinear')
-            sampled_continuous = F.grid_sample(continuous_grid, points_for_grid_sample, align_corners=True, mode='bilinear')
+            sampled_binary = F.grid_sample(binary_grid, points_for_grid_sample, align_corners=False, mode='bilinear')
+            sampled_continuous = F.grid_sample(continuous_grid, points_for_grid_sample, align_corners=False, mode='bilinear')
             
             # Apply STE: binary values + (continuous - continuous.detach())
             sampled_conf = sampled_binary.detach() + (sampled_continuous - sampled_continuous.detach())
@@ -465,7 +465,7 @@ class ConfidenceField(nn.Module):
         else:
             # Use continuous confidence values
             conf_grid = self.get_confidence().unsqueeze(0).unsqueeze(0)  # (1, 1, D, H, W)
-            sampled_conf = F.grid_sample(conf_grid, points_for_grid_sample, align_corners=True, mode='bilinear')
+            sampled_conf = F.grid_sample(conf_grid, points_for_grid_sample, align_corners=False, mode='bilinear')
             sampled_conf = sampled_conf.view(-1, 1) # (N, 1)
 
         # Compute gradient using either stencil-based or analytical method
@@ -483,7 +483,7 @@ class ConfidenceField(nn.Module):
                 raise RuntimeError("Gradient must be computed before querying when using stencil-based gradients.")
                 
             # self.grad_c_grid is (1, 3, D, H, W)
-            sampled_grad = F.grid_sample(self.grad_c_grid, points_for_grid_sample, align_corners=True, mode='bilinear')
+            sampled_grad = F.grid_sample(self.grad_c_grid, points_for_grid_sample, align_corners=False, mode='bilinear')
             
             # (1, 3, N, 1, 1) -> (N, 3)
             sampled_grad = sampled_grad.view(3, -1).permute(1, 0)

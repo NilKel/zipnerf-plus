@@ -31,7 +31,7 @@ class TriMipEncoding(nn.Module):
         nn.init.uniform_(self.fm, -1e-2, 1e-2)
 
     def forward(self, x, level):
-        # x in [0,1], level in [0,max_level]
+        # x in [-1,1], level in [0,max_level]
         # x is Nx3, level is Nx1
         if 0 == x.shape[0]:
             return torch.zeros([x.shape[0], self.feature_dim * 3]).to(x)
@@ -52,8 +52,8 @@ class TriMipEncoding(nn.Module):
         ]
         
         for i, coords in enumerate(plane_coords):
-            # Convert [0,1] coordinates to [-1,1] for grid_sample
-            coords_grid = coords * 2.0 - 1.0  # [N, 2]
+            # Coordinates are already in [-1,1] range for grid_sample
+            coords_grid = coords  # [N, 2]
             
             # Reshape for grid_sample: [N, 2] -> [1, 1, N, 2]
             coords_reshaped = coords_grid.unsqueeze(0).unsqueeze(1)  # [1, 1, N, 2]
@@ -64,7 +64,7 @@ class TriMipEncoding(nn.Module):
             # Sample from plane using bilinear interpolation
             plane_features = F.grid_sample(
                 plane, coords_reshaped, 
-                mode='bilinear', padding_mode='border', align_corners=True
+                mode='bilinear', padding_mode='border', align_corners=False
             )  # [1, C, 1, N]
             
             # Reshape to [N, C]
@@ -115,7 +115,7 @@ class PotentialTriMipEncoding(nn.Module):
         nn.init.uniform_(self.fm, -1e-2, 1e-2)
 
     def forward(self, x, level):
-        # x in [0,1], level in [0,max_level]
+        # x in [-1,1], level in [0,max_level]
         # x is Nx3, level is Nx1
         if 0 == x.shape[0]:
             return torch.zeros([x.shape[0], self.dim_out]).to(x)
@@ -136,8 +136,8 @@ class PotentialTriMipEncoding(nn.Module):
         ]
         
         for i, coords in enumerate(plane_coords):
-            # Convert [0,1] coordinates to [-1,1] for grid_sample
-            coords_grid = coords * 2.0 - 1.0  # [N, 2]
+            # Coordinates are already in [-1,1] range for grid_sample
+            coords_grid = coords  # [N, 2]
             
             # Reshape for grid_sample: [N, 2] -> [1, 1, N, 2]
             coords_reshaped = coords_grid.unsqueeze(0).unsqueeze(1)  # [1, 1, N, 2]
@@ -148,7 +148,7 @@ class PotentialTriMipEncoding(nn.Module):
             # Sample from plane using bilinear interpolation
             plane_features = F.grid_sample(
                 plane, coords_reshaped, 
-                mode='bilinear', padding_mode='border', align_corners=True
+                mode='bilinear', padding_mode='border', align_corners=False
             )  # [1, C*3, 1, N]
             
             # Reshape to [N, C*3]

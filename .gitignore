@@ -6,6 +6,8 @@ tests/__pycache__/
 .idea/
 __MACOSX/
 exp/
+exp
+exp/*
 data/
 assets/
 test.py
