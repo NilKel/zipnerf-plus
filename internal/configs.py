@@ -49,6 +49,7 @@ class Config:
     
     # Spatial contraction settings
     non_spherical_contraction: bool = False  # If True, use MeRF's cubic contraction instead of mip-NeRF 360's spherical contraction
+    non_uniform_cells: bool = False  # If True, use non-uniform finite differences accounting for variable cell spacing in contracted space
     
     # Divergence regularization settings
     use_divergence_regularization: bool = False  # If True, enable divergence regularization

@@ -2,11 +2,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from pathlib import Path
+from internal import coord
 
 class ConfidenceField(nn.Module):
     def __init__(self, resolution=(128, 128, 128), init_val=-1, init_rand_mag=2.0, post_mult=0.01, device='cuda', 
                  stencil_type='central_difference_4th_order', pretrained_grid_path=None, freeze_pretrained=True,
-                 binary_occupancy=False, analytical_gradient=False, use_admm_pruner=False, contraction_aware_gradients=True):
+                 binary_occupancy=False, analytical_gradient=False, use_admm_pruner=False, contraction_aware_gradients=True,
+                 non_spherical_contraction=False, non_uniform_cells=False):
         """
         Initialize ConfidenceField.
         
@@ -22,6 +24,8 @@ class ConfidenceField(nn.Module):
             analytical_gradient: If True, use analytical gradient (autograd) instead of stencil-based finite differences
             use_admm_pruner: If True, enable ADMM pruning functionality
             contraction_aware_gradients: If True, account for spatial contraction in gradient computation
+            non_spherical_contraction: If True, use cubic contraction; if False, use spherical contraction
+            non_uniform_cells: If True, use non-uniform finite differences for variable cell spacing
         """
         super().__init__()
         self.resolution = resolution
@@ -31,6 +35,8 @@ class ConfidenceField(nn.Module):
         self.analytical_gradient = analytical_gradient
         self.use_admm_pruner = use_admm_pruner
         self.contraction_aware_gradients = contraction_aware_gradients
+        self.non_spherical_contraction = non_spherical_contraction
+        self.non_uniform_cells = non_uniform_cells
         
         # Initialize logits to be slightly negative on average
         self.c_grid = nn.Parameter(torch.randn(*resolution, device=device) * init_rand_mag + init_val)
@@ -158,13 +164,214 @@ class ConfidenceField(nn.Module):
         """Returns the confidence values by applying sigmoid to the grid logits."""
         return torch.sigmoid(self.c_grid)
 
+    def _compute_world_space_intervals(self, grid_coords, axis):
+        """
+        Compute world-space intervals between adjacent grid points for non-uniform finite differences.
+        
+        Args:
+            grid_coords: (D, H, W, 3) tensor of contracted space coordinates
+            axis: 0=z, 1=y, 2=x - which axis to compute intervals for
+            
+        Returns:
+            h_left, h_right: (D, H, W) tensors of world-space distances to left/right neighbors
+        """
+        D, H, W = self.resolution
+        device = grid_coords.device
+        
+        # Create coordinate shifts for left and right neighbors
+        shift = torch.zeros(3, device=device)
+        if axis == 0:  # z-axis
+            shift[0] = 2.0 / (D - 1)
+        elif axis == 1:  # y-axis  
+            shift[1] = 2.0 / (H - 1)
+        elif axis == 2:  # x-axis
+            shift[2] = 2.0 / (W - 1)
+        
+        # Get contracted coordinates of neighbors
+        coord_left = grid_coords - shift
+        coord_right = grid_coords + shift
+        
+        # Convert to world space using inverse contraction
+        if self.non_spherical_contraction:
+            world_center = coord.inv_contract_cubic(grid_coords)
+            world_left = coord.inv_contract_cubic(coord_left)
+            world_right = coord.inv_contract_cubic(coord_right)
+        else:
+            world_center = coord.inv_contract(grid_coords)
+            world_left = coord.inv_contract(coord_left)
+            world_right = coord.inv_contract(coord_right)
+        
+        # Compute world-space distances
+        h_left = torch.norm(world_center - world_left, dim=-1)
+        h_right = torch.norm(world_right - world_center, dim=-1)
+        
+        return h_left, h_right
+    
+    def _apply_sundqvist_veronis_stencil(self, conf_values, h_left, h_right, axis):
+        """
+        Apply the Sundqvist & Veronis (1970) finite difference formula for non-uniform grids.
+        
+        Formula: f'(x_i) = (f_{i+1} * h_{i-1}^2 - f_{i-1} * h_i^2 + f_i * (h_i^2 - h_{i-1}^2)) / (h_i * h_{i-1} * (h_i + h_{i-1}))
+        
+        Args:
+            conf_values: (D, H, W) tensor of confidence values
+            h_left, h_right: (D, H, W) tensors of world-space intervals
+            axis: 0=z, 1=y, 2=x - which axis to compute derivative for
+            
+        Returns:
+            grad: (D, H, W) tensor of gradients along the specified axis
+        """
+        D, H, W = self.resolution
+        eps = 1e-8
+        
+        # Get neighbor values by padding and shifting
+        if axis == 0:  # z-axis
+            conf_left = F.pad(conf_values, (0, 0, 0, 0, 1, 0), mode='replicate')[:-1, :, :]
+            conf_right = F.pad(conf_values, (0, 0, 0, 0, 0, 1), mode='replicate')[1:, :, :]
+            h_left = h_left[1:-1] if D > 2 else h_left  # Exclude boundary points
+            h_right = h_right[1:-1] if D > 2 else h_right
+            conf_center = conf_values[1:-1] if D > 2 else conf_values
+            conf_left = conf_left[1:-1] if D > 2 else conf_left
+            conf_right = conf_right[1:-1] if D > 2 else conf_right
+        elif axis == 1:  # y-axis
+            conf_left = F.pad(conf_values, (0, 0, 1, 0), mode='replicate')[:, :-1, :]
+            conf_right = F.pad(conf_values, (0, 0, 0, 1), mode='replicate')[:, 1:, :]
+            h_left = h_left[:, 1:-1] if H > 2 else h_left
+            h_right = h_right[:, 1:-1] if H > 2 else h_right
+            conf_center = conf_values[:, 1:-1] if H > 2 else conf_values
+            conf_left = conf_left[:, 1:-1] if H > 2 else conf_left
+            conf_right = conf_right[:, 1:-1] if H > 2 else conf_right
+        elif axis == 2:  # x-axis
+            conf_left = F.pad(conf_values, (1, 0), mode='replicate')[:, :, :-1]
+            conf_right = F.pad(conf_values, (0, 1), mode='replicate')[:, :, 1:]
+            h_left = h_left[:, :, 1:-1] if W > 2 else h_left
+            h_right = h_right[:, :, 1:-1] if W > 2 else h_right
+            conf_center = conf_values[:, :, 1:-1] if W > 2 else conf_values
+            conf_left = conf_left[:, :, 1:-1] if W > 2 else conf_left
+            conf_right = conf_right[:, :, 1:-1] if W > 2 else conf_right
+        
+        # Apply Sundqvist & Veronis formula
+        h_left_safe = torch.clamp(h_left, min=eps)
+        h_right_safe = torch.clamp(h_right, min=eps)
+        
+        numerator = (conf_right * h_left_safe**2 - 
+                    conf_left * h_right_safe**2 + 
+                    conf_center * (h_right_safe**2 - h_left_safe**2))
+        
+        denominator = h_right_safe * h_left_safe * (h_right_safe + h_left_safe)
+        denominator = torch.clamp(denominator, min=eps)
+        
+        grad_center = numerator / denominator
+        
+        # Handle boundaries with one-sided differences
+        grad_full = torch.zeros_like(conf_values)
+        
+        if axis == 0 and D > 2:
+            grad_full[1:-1, :, :] = grad_center
+            # Boundary conditions
+            grad_full[0, :, :] = (conf_values[1, :, :] - conf_values[0, :, :]) / h_right[0, :, :].clamp(min=eps)
+            grad_full[-1, :, :] = (conf_values[-1, :, :] - conf_values[-2, :, :]) / h_left[-1, :, :].clamp(min=eps)
+        elif axis == 1 and H > 2:
+            grad_full[:, 1:-1, :] = grad_center
+            grad_full[:, 0, :] = (conf_values[:, 1, :] - conf_values[:, 0, :]) / h_right[:, 0, :].clamp(min=eps)
+            grad_full[:, -1, :] = (conf_values[:, -1, :] - conf_values[:, -2, :]) / h_left[:, -1, :].clamp(min=eps)
+        elif axis == 2 and W > 2:
+            grad_full[:, :, 1:-1] = grad_center
+            grad_full[:, :, 0] = (conf_values[:, :, 1] - conf_values[:, :, 0]) / h_right[:, :, 0].clamp(min=eps)
+            grad_full[:, :, -1] = (conf_values[:, :, -1] - conf_values[:, :, -2]) / h_left[:, :, -1].clamp(min=eps)
+        else:
+            # For small grids, use simple differences
+            grad_full = grad_center
+        
+        return grad_full
+
+    def _compute_gradient_non_uniform(self):
+        """
+        Compute gradients using non-uniform finite differences for contracted space.
+        Uses the Sundqvist & Veronis (1970) formula to account for variable cell spacing.
+        """
+        D, H, W = self.resolution
+        
+        # Create coordinate grid in contracted space [-1, 1]
+        z_coords = torch.linspace(-1, 1, D, device=self.c_grid.device)
+        y_coords = torch.linspace(-1, 1, H, device=self.c_grid.device)
+        x_coords = torch.linspace(-1, 1, W, device=self.c_grid.device)
+        
+        zz, yy, xx = torch.meshgrid(z_coords, y_coords, x_coords, indexing='ij')
+        grid_coords = torch.stack([zz, yy, xx], dim=-1)  # (D, H, W, 3)
+        
+        if self.binary_occupancy:
+            # STE Implementation with non-uniform finite differences
+            conf_continuous = self.get_confidence()
+            
+            with torch.no_grad():
+                conf_binary = (torch.sigmoid(self.c_grid) > 0.5).float()
+            
+            self.binary_c_grid = conf_binary
+            
+            # Compute gradients for both continuous and binary versions
+            grad_x_cont = self._compute_gradient_axis_non_uniform(conf_continuous, grid_coords, axis=2)
+            grad_y_cont = self._compute_gradient_axis_non_uniform(conf_continuous, grid_coords, axis=1)
+            grad_z_cont = self._compute_gradient_axis_non_uniform(conf_continuous, grid_coords, axis=0)
+            
+            grad_x_bin = self._compute_gradient_axis_non_uniform(conf_binary, grid_coords, axis=2)
+            grad_y_bin = self._compute_gradient_axis_non_uniform(conf_binary, grid_coords, axis=1)
+            grad_z_bin = self._compute_gradient_axis_non_uniform(conf_binary, grid_coords, axis=0)
+            
+            # Apply STE: binary values with continuous gradients
+            grad_x = grad_x_bin.detach() + (grad_x_cont - grad_x_cont.detach())
+            grad_y = grad_y_bin.detach() + (grad_y_cont - grad_y_cont.detach())
+            grad_z = grad_z_bin.detach() + (grad_z_cont - grad_z_cont.detach())
+        else:
+            # Standard non-uniform finite differences on smooth sigmoid
+            conf = self.get_confidence()
+            self.binary_c_grid = None
+            
+            grad_x = self._compute_gradient_axis_non_uniform(conf, grid_coords, axis=2)
+            grad_y = self._compute_gradient_axis_non_uniform(conf, grid_coords, axis=1) 
+            grad_z = self._compute_gradient_axis_non_uniform(conf, grid_coords, axis=0)
+        
+        # Add batch dimensions for consistency with convolution-based method
+        grad_x = grad_x.unsqueeze(0).unsqueeze(0)  # (1, 1, D, H, W)
+        grad_y = grad_y.unsqueeze(0).unsqueeze(0)
+        grad_z = grad_z.unsqueeze(0).unsqueeze(0)
+        
+        # Store gradient grid
+        self.grad_c_grid = torch.cat([grad_x, grad_y, grad_z], dim=1)
+    
+    def _compute_gradient_axis_non_uniform(self, conf_values, grid_coords, axis):
+        """
+        Compute gradient along a specific axis using non-uniform finite differences.
+        
+        Args:
+            conf_values: (D, H, W) tensor of confidence values
+            grid_coords: (D, H, W, 3) tensor of contracted space coordinates  
+            axis: 0=z, 1=y, 2=x - which axis to compute gradient for
+            
+        Returns:
+            grad: (D, H, W) tensor of gradients along the specified axis
+        """
+        # Compute world-space intervals
+        h_left, h_right = self._compute_world_space_intervals(grid_coords, axis)
+        
+        # Apply Sundqvist & Veronis formula
+        grad = self._apply_sundqvist_veronis_stencil(conf_values, h_left, h_right, axis)
+        
+        return grad
+
     def compute_gradient(self):
         """
-        Computes the gradient of the confidence grid using 3D convolution.
+        Computes the gradient of the confidence grid using either uniform or non-uniform finite differences.
         If binary_occupancy is enabled, uses Straight-Through Estimator (STE) to 
         compute gradients from binary occupancy values while maintaining gradient flow.
         This is a pre-computation step that should be done once per training iteration.
         """
+        # Check if we should use non-uniform finite differences
+        if self.non_uniform_cells and not self.analytical_gradient:
+            self._compute_gradient_non_uniform()
+            return
+            
+        # Original uniform finite difference computation
         padding = (self.k_size - 1) // 2
         
         if self.binary_occupancy:
@@ -264,9 +471,13 @@ class ConfidenceField(nn.Module):
         The key insight: after spatial contraction, grid cells don't represent uniform
         world-space distances. We need to account for the contraction function's Jacobian.
         
-        For the standard mip-NeRF 360 contraction:
+        For spherical contraction (mip-NeRF 360):
         - Points inside unit sphere: mapped nearly linearly  
         - Points outside unit sphere: compressed into shell [1, 2]
+        
+        For cubic contraction (MeRF):
+        - Points inside unit cube: mapped linearly
+        - Points outside unit cube: compressed using L∞ norm scaling
         
         Args:
             grad_x, grad_y, grad_z: Raw gradients from finite differences
@@ -285,19 +496,71 @@ class ConfidenceField(nn.Module):
         zz, yy, xx = torch.meshgrid(z_coords, y_coords, x_coords, indexing='ij')
         grid_coords = torch.stack([zz, yy, xx], dim=-1)  # (D, H, W, 3)
         
-        # Compute contraction scaling factor at each grid point
-        # For mip-NeRF 360 contraction: f(x) = x if |x|<=1, else (2-1/|x|) * x/|x|
-        # The Jacobian diagonal elements give us the local scaling
-        coord_norm = torch.norm(grid_coords, dim=-1, keepdim=True)  # (D, H, W, 1)
-        
-        # For points outside unit sphere, contraction introduces non-uniform scaling
-        # df/dx = 1 if |x|<=1, else 1/|x|^2 for the dominant term
-        # This is an approximation - the full Jacobian is more complex
-        scaling_factor = 1.0/torch.where(
-            coord_norm <= 1.0,
-            torch.ones_like(coord_norm),  # Linear region: no scaling needed
-            1.0 / (coord_norm ** 2 + 1e-8)  # Contracted region: inverse squared scaling
-        )
+        if self.non_spherical_contraction:
+            # Cubic contraction scaling (MeRF) following coord.py formulation
+            # contract𝜋(x)𝑗 = {
+            #   𝑥𝑗                                if ∥x∥∞≤1
+            #   𝑥𝑗/∥x∥∞                          if 𝑥𝑗 ≠ ∥x∥∞> 1  
+            #   (2 - 1/|𝑥𝑗|) * 𝑥𝑗/|𝑥𝑗|         if 𝑥𝑗= ∥x∥∞> 1
+            # }
+            
+            eps = 1e-8
+            abs_coords = torch.abs(grid_coords)  # (D, H, W, 3)
+            coord_norm_inf = torch.max(abs_coords, dim=-1, keepdim=True)[0]  # (D, H, W, 1)
+            
+            # Case 1: Inside unit cube ∥x∥∞≤1
+            mask_inside = coord_norm_inf <= 1.0
+            
+            # Case 2 & 3: Outside unit cube ∥x∥∞> 1
+            # Determine which coordinates are the max coordinate
+            max_coord_mask = (abs_coords == coord_norm_inf) & (coord_norm_inf > 1.0)  # (D, H, W, 3)
+            
+            # Safe clamping for numerical stability
+            coord_norm_inf_safe = torch.clamp(coord_norm_inf, min=eps)
+            abs_coords_safe = torch.clamp(abs_coords, min=eps)
+            
+            # Scaling calculations for finite differences in contracted space:
+            # We need the inverse Jacobian to convert contracted-space gradients to world-space
+            # Case 1: df/dx = 1 → scaling = 1/1 = 1
+            # Case 2: df/dx ≈ 1/∥x∥∞ → scaling = 1/(1/∥x∥∞) = ∥x∥∞  
+            # Case 3: df/dx = 1/|𝑥𝑗|² → scaling = 1/(1/|𝑥𝑗|²) = |𝑥𝑗|²
+            
+            scale_identity = torch.ones_like(abs_coords)  # Case 1: identity
+            scale_non_max = coord_norm_inf_safe.expand_as(abs_coords)  # Case 2: ||x||∞
+            scale_max = abs_coords_safe ** 2  # Case 3: |x_j|²
+            
+            # Apply the appropriate scaling based on the region
+            scaling_factor_per_coord = torch.where(
+                mask_inside.expand_as(abs_coords),
+                scale_identity,  # Inside: identity scaling
+                torch.where(
+                    max_coord_mask,
+                    scale_max,      # Max coordinate outside: 1/|x_j|²
+                    scale_non_max   # Non-max coordinate outside: 1/∥x∥∞
+                )
+            )  # (D, H, W, 3)
+            
+            # For gradient scaling, use geometric mean of coordinate scalings
+            # This preserves the relative scaling relationships better than arithmetic mean
+            scaling_factor_log = torch.log(scaling_factor_per_coord + eps)
+            scaling_factor = torch.exp(torch.mean(scaling_factor_log, dim=-1, keepdim=True))  # (D, H, W, 1)
+            
+        else:
+            # Spherical contraction scaling (mip-NeRF 360)
+            # Use L2 norm
+            coord_norm = torch.norm(grid_coords, dim=-1, keepdim=True)  # (D, H, W, 1)
+            
+            # For spherical contraction: f(x) = x if |x|≤1, else (2√|x| - 1)/|x|² * x
+            # The dominant scaling factor for |x| > 1 is approximately |x|²
+            # We need the inverse Jacobian: scaling ≈ |x|² for contracted regions
+            eps = 1e-8
+            coord_norm_safe = torch.clamp(coord_norm, min=eps)
+            
+            scaling_factor = torch.where(
+                coord_norm <= 1.0,
+                torch.ones_like(coord_norm),  # Linear region: no scaling needed
+                coord_norm_safe ** 2  # Contracted region: |x|² scaling
+            )
         
         # Apply scaling to gradients
         # Note: This is a simplified approach. A full solution would compute the exact Jacobian.
@@ -456,8 +719,8 @@ class ConfidenceField(nn.Module):
             continuous_grid = self.get_confidence().unsqueeze(0).unsqueeze(0)  # (1, 1, D, H, W)
             
             # Sample from both grids
-            sampled_binary = F.grid_sample(binary_grid, points_for_grid_sample, align_corners=False, mode='bilinear')
-            sampled_continuous = F.grid_sample(continuous_grid, points_for_grid_sample, align_corners=False, mode='bilinear')
+            sampled_binary = F.grid_sample(binary_grid, points_for_grid_sample, align_corners=True, mode='bilinear')
+            sampled_continuous = F.grid_sample(continuous_grid, points_for_grid_sample, align_corners=True, mode='bilinear')
             
             # Apply STE: binary values + (continuous - continuous.detach())
             sampled_conf = sampled_binary.detach() + (sampled_continuous - sampled_continuous.detach())
@@ -465,7 +728,7 @@ class ConfidenceField(nn.Module):
         else:
             # Use continuous confidence values
             conf_grid = self.get_confidence().unsqueeze(0).unsqueeze(0)  # (1, 1, D, H, W)
-            sampled_conf = F.grid_sample(conf_grid, points_for_grid_sample, align_corners=False, mode='bilinear')
+            sampled_conf = F.grid_sample(conf_grid, points_for_grid_sample, align_corners=True, mode='bilinear')
             sampled_conf = sampled_conf.view(-1, 1) # (N, 1)
 
         # Compute gradient using either stencil-based or analytical method
@@ -483,7 +746,7 @@ class ConfidenceField(nn.Module):
                 raise RuntimeError("Gradient must be computed before querying when using stencil-based gradients.")
                 
             # self.grad_c_grid is (1, 3, D, H, W)
-            sampled_grad = F.grid_sample(self.grad_c_grid, points_for_grid_sample, align_corners=False, mode='bilinear')
+            sampled_grad = F.grid_sample(self.grad_c_grid, points_for_grid_sample, align_corners=True, mode='bilinear')
             
             # (1, 3, N, 1, 1) -> (N, 3)
             sampled_grad = sampled_grad.view(3, -1).permute(1, 0)
