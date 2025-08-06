@@ -1,12 +1,14 @@
 
 # Base configuration
-Config.comment = '64bincf'
+Config.comment = 'binsum_blackbg'
 Config.dataset_loader = 'blender'
 
 # POTENTIAL GRID CONFIGURATION AND TRIPLANES
 Config.use_potential = True  # Use tensor potential encoding G · ∇occupancy
-Config.use_triplane = True  # Enable triplane blending with hashgrid
-Config.confidence_grid_resolution = (64, 64, 64)
+Config.use_triplane = False  # Enable triplane blending with hashgrid
+Config.confidence_grid_resolution = (16, 16, 16)
+# Config.confidence_grid_resolutions = [(16,16,16), (32,32,32), (64,64,64)]
+Config.confidence_combination_method = "sum"
 Config.confidence_reg_mult = 0.0
 Config.use_admm_pruner = False
 Config.admm_sparsity_constraint = 0.04
@@ -14,7 +16,7 @@ Config.admm_sparsity_constraint = 0.04
 Config.binary_occupancy = True
 
 # Default data configuration - can be overridden
-Config.data_dir = "/home/nilkel/Projects/data/nerf_synthetic/lego"
+Config.data_dir = "/home/nilkel/Projects/data/nerf_synthetic/ficus"
 
 # Camera and scene settings
 Config.near = 2.0

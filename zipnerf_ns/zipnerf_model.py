@@ -36,7 +36,7 @@ class ZipNerfModelConfig(ModelConfig):
     """random number generator (or None for deterministic output)."""
     zero_glo: bool = False
     """if True, when using GLO pass in vector of zeros."""
-    background_color: Literal["random", "black", "white"] = "white"
+    background_color: Literal["random", "black", "white"] = "black"
     """Whether to randomize the background color."""
     _target: Type = field(default_factory=lambda: ZipNerfModel)
 
@@ -63,7 +63,7 @@ class ZipNerfModel(Model):
         
         self.collider = NearFarCollider(near_plane=self.zipnerf.config.near, far_plane=self.zipnerf.config.far)
         self.step = 0
-
+        
         # Renderer
         self.renderer_rgb = RGBRenderer(background_color=self.config.background_color)
 

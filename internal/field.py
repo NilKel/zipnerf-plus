@@ -4,16 +4,71 @@ import torch.nn.functional as F
 from pathlib import Path
 from internal import coord
 
+class ConfidenceCombinationMLP(nn.Module):
+    """Small MLP for combining multi-resolution confidence features."""
+    
+    def __init__(self, input_dim, hidden_dim=32, num_layers=2, device='cuda'):
+        """
+        Initialize the combination MLP.
+        
+        Args:
+            input_dim: Input dimension (number of resolution levels)
+            hidden_dim: Hidden layer dimension
+            num_layers: Number of hidden layers
+            device: Device to place tensors on
+        """
+        super().__init__()
+        
+        layers = []
+        current_dim = input_dim
+        
+        # Add hidden layers
+        for i in range(num_layers):
+            layers.append(nn.Linear(current_dim, hidden_dim))
+            layers.append(nn.ReLU())
+            current_dim = hidden_dim
+        
+        # Output layer
+        layers.append(nn.Linear(current_dim, 1))
+        
+        self.mlp = nn.Sequential(*layers)
+        
+        # Move to device
+        self.to(device)
+        
+        # Initialize weights
+        self._init_weights()
+    
+    def _init_weights(self):
+        """Initialize weights with small values for stable training."""
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight, gain=0.1)
+                nn.init.zeros_(module.bias)
+    
+    def forward(self, x):
+        """
+        Forward pass.
+        
+        Args:
+            x: Input tensor of shape (..., input_dim)
+            
+        Returns:
+            Combined confidence values of shape (..., 1)
+        """
+        return self.mlp(x)
+
 class ConfidenceField(nn.Module):
     def __init__(self, resolution=(128, 128, 128), init_val=-1, init_rand_mag=2.0, post_mult=0.01, device='cuda', 
                  stencil_type='central_difference_4th_order', pretrained_grid_path=None, freeze_pretrained=True,
                  binary_occupancy=False, analytical_gradient=False, use_admm_pruner=False, contraction_aware_gradients=True,
-                 non_spherical_contraction=False, non_uniform_cells=False):
+                 non_spherical_contraction=False, non_uniform_cells=False, resolutions=None, combination_method="mlp",
+                 mlp_hidden_dim=32, mlp_num_layers=2):
         """
         Initialize ConfidenceField.
         
         Args:
-            resolution: Grid resolution (D, H, W)
+            resolution: Grid resolution (D, H, W) - legacy single resolution parameter
             init_val: Initial value for random initialization
             init_rand_mag: Magnitude of random initialization
             device: Device to place tensors on
@@ -26,9 +81,27 @@ class ConfidenceField(nn.Module):
             contraction_aware_gradients: If True, account for spatial contraction in gradient computation
             non_spherical_contraction: If True, use cubic contraction; if False, use spherical contraction
             non_uniform_cells: If True, use non-uniform finite differences for variable cell spacing
+            resolutions: List of resolutions [(D1,H1,W1), (D2,H2,W2), ...] for multi-resolution grids
+            combination_method: "mlp" or "sum" - how to combine multi-resolution features
+            mlp_hidden_dim: Hidden dimension for combination MLP
+            mlp_num_layers: Number of layers in combination MLP
         """
         super().__init__()
-        self.resolution = resolution
+        
+        # Determine if we're using multi-resolution or single resolution
+        if resolutions is not None and len(resolutions) > 0:
+            self.use_multi_resolution = True
+            self.resolutions = sorted(resolutions, key=lambda x: x[0] * x[1] * x[2])  # Sort by volume
+            self.num_grids = len(resolutions)
+            # Use the highest resolution as the base grid
+            self.base_resolution = self.resolutions[-1]  # Largest resolution
+        else:
+            self.use_multi_resolution = False
+            self.resolutions = [resolution]
+            self.num_grids = 1
+            self.base_resolution = resolution
+        
+        self.resolution = resolution  # Keep for backward compatibility
         self.pretrained_grid_path = pretrained_grid_path
         self.freeze_pretrained = freeze_pretrained
         self.binary_occupancy = binary_occupancy
@@ -37,30 +110,57 @@ class ConfidenceField(nn.Module):
         self.contraction_aware_gradients = contraction_aware_gradients
         self.non_spherical_contraction = non_spherical_contraction
         self.non_uniform_cells = non_uniform_cells
+        self.combination_method = combination_method
         
-        # Initialize logits to be slightly negative on average
-        self.c_grid = nn.Parameter(torch.randn(*resolution, device=device) * init_rand_mag + init_val)
-        # self.c_grid = nn.Parameter(torch.nn.init.uniform_(*resolution, -0.01, 0.01))
+        # Always create only the base (highest resolution) grid as learnable parameter
+        self.c_grid = nn.Parameter(torch.randn(*self.base_resolution, device=device) * init_rand_mag + init_val)
         
-        # ADMM Pruner initialization
+        # Create combination MLP if needed for multi-resolution
+        if self.use_multi_resolution and self.combination_method == "mlp":
+            self.combination_mlp = ConfidenceCombinationMLP(
+                input_dim=self.num_grids,
+                hidden_dim=mlp_hidden_dim,
+                num_layers=mlp_num_layers,
+                device=device
+            )
+        else:
+            self.combination_mlp = None
+        
+        # Cache for downsampled grids (computed on-demand)
+        self._cached_downsampled_grids = {}
+        self._cache_valid = False
+        
+        # ADMM Pruner initialization 
         if self.use_admm_pruner:
             # Dual variable (γ) for ADMM optimization - Lagrange multiplier
             self.dual_variable = nn.Parameter(torch.tensor(0.0, device=device))
             self.dual_variable.requires_grad_(False)  # Updated manually, not by optimizer
             
-            # Cache for total grid elements (computed once)
+            # Cache for total grid elements (only count the base grid since that's what we optimize)
             self.total_grid_elements = self.c_grid.nelement()
         
-        # Load pretrained grid if provided
+        # Load pretrained grid if provided (only supported for single grid currently)
         if pretrained_grid_path is not None and pretrained_grid_path != '':
+            if self.use_multi_resolution:
+                print("⚠️  Loading pretrained grid into highest resolution level of multi-resolution field")
             self._load_pretrained_grid(pretrained_grid_path, device, stencil_type)
         
+        # Initialize gradient storage (only for base grid since that's what we optimize)
         self.grad_c_grid = None
         self.binary_c_grid = None  # Store binary occupancy grid when using STE
         
         # Only build stencil kernels if not using analytical gradients
         if not self.analytical_gradient:
             self._build_kernels(device, stencil_type)
+            
+        if self.use_multi_resolution:
+            print(f"🔧 Multi-resolution confidence field initialized:")
+            print(f"   Base grid (optimized): {self.base_resolution[0]}³")
+            print(f"   Downsampled to: {[f'{r[0]}³' for r in self.resolutions[:-1]]}")
+            print(f"   Combination method: {combination_method}")
+            print(f"   Total parameters: {self.c_grid.numel():,}")
+        else:
+            print(f"🔧 Single-resolution confidence field: {self.base_resolution[0]}³")
 
     def _load_pretrained_grid(self, pretrained_grid_path, device, stencil_type):
         """
@@ -112,10 +212,10 @@ class ConfidenceField(nn.Module):
         
         # Check if resolution matches
         pretrained_resolution = pretrained_logits.shape
-        if pretrained_resolution != self.resolution:
-            print(f"⚠️  Warning: Pretrained grid resolution {pretrained_resolution} != expected {self.resolution}")
+        if pretrained_resolution != self.base_resolution:
+            print(f"⚠️  Warning: Pretrained grid resolution {pretrained_resolution} != expected {self.base_resolution}")
             print(f"    Updating resolution to match pretrained grid")
-            self.resolution = pretrained_resolution
+            self.base_resolution = pretrained_resolution
             
             # Recreate the parameter with correct size
             self.c_grid = nn.Parameter(torch.zeros(*pretrained_resolution, device=device))
@@ -160,9 +260,65 @@ class ConfidenceField(nn.Module):
         self.kernel_dy = coeffs.view(1, 1, 1, self.k_size, 1)
         self.kernel_dz = coeffs.view(1, 1, self.k_size, 1, 1)
 
-    def get_confidence(self):
-        """Returns the confidence values by applying sigmoid to the grid logits."""
-        return torch.sigmoid(self.c_grid)
+    def _generate_downsampled_grids(self):
+        """
+        Generate downsampled versions of the base confidence grid.
+        Uses 3D average pooling to create consistent lower-resolution versions.
+        """
+        if not self.use_multi_resolution:
+            return
+            
+        with torch.no_grad():
+            base_conf = torch.sigmoid(self.c_grid)  # (D, H, W)
+            base_conf = base_conf.unsqueeze(0).unsqueeze(0)  # (1, 1, D, H, W)
+            
+            self._cached_downsampled_grids = {}
+            
+            for i, target_res in enumerate(self.resolutions):
+                if target_res == self.base_resolution:
+                    # This is the base grid, store directly
+                    self._cached_downsampled_grids[i] = base_conf.squeeze(0).squeeze(0)
+                else:
+                    # Downsample using adaptive average pooling
+                    downsampled = F.adaptive_avg_pool3d(base_conf, target_res)
+                    self._cached_downsampled_grids[i] = downsampled.squeeze(0).squeeze(0)
+            
+            self._cache_valid = True
+
+    def _invalidate_cache(self):
+        """Invalidate the downsampled grid cache when base grid changes."""
+        self._cache_valid = False
+        self._cached_downsampled_grids = {}
+
+    def get_confidence(self, grid_index=None):
+        """
+        Returns the confidence values by applying sigmoid to the grid logits.
+        For multi-resolution mode, generates downsampled versions from the base grid.
+        
+        Args:
+            grid_index: For multi-resolution mode, specify which grid to get confidence from.
+                       If None, returns all grids as a list. Ignored in single-resolution mode.
+        
+        Returns:
+            Single grid mode: confidence tensor
+            Multi-resolution mode: 
+                - If grid_index is specified: confidence tensor for that grid
+                - If grid_index is None: list of confidence tensors for all grids
+        """
+        if not self.use_multi_resolution:
+            # Single resolution mode
+            return torch.sigmoid(self.c_grid)
+        
+        # Multi-resolution mode: generate downsampled grids if needed
+        if not self._cache_valid:
+            self._generate_downsampled_grids()
+        
+        if grid_index is not None:
+            # Return specific grid
+            return self._cached_downsampled_grids[grid_index]
+        else:
+            # Return all grids as list
+            return [self._cached_downsampled_grids[i] for i in range(self.num_grids)]
 
     def _compute_world_space_intervals(self, grid_coords, axis):
         """
@@ -285,27 +441,32 @@ class ConfidenceField(nn.Module):
         
         return grad_full
 
-    def _compute_gradient_non_uniform(self):
+    def _compute_gradient_non_uniform_single(self, grid_index, current_resolution, c_grid):
         """
-        Compute gradients using non-uniform finite differences for contracted space.
+        Compute gradients using non-uniform finite differences for contracted space for the base grid.
         Uses the Sundqvist & Veronis (1970) formula to account for variable cell spacing.
+        
+        Args:
+            grid_index: Unused - kept for compatibility (always 0)
+            current_resolution: Resolution tuple (D, H, W) for the base grid
+            c_grid: The confidence grid tensor for the base grid
         """
-        D, H, W = self.resolution
+        D, H, W = current_resolution
         
         # Create coordinate grid in contracted space [-1, 1]
-        z_coords = torch.linspace(-1, 1, D, device=self.c_grid.device)
-        y_coords = torch.linspace(-1, 1, H, device=self.c_grid.device)
-        x_coords = torch.linspace(-1, 1, W, device=self.c_grid.device)
+        z_coords = torch.linspace(-1, 1, D, device=c_grid.device)
+        y_coords = torch.linspace(-1, 1, H, device=c_grid.device)
+        x_coords = torch.linspace(-1, 1, W, device=c_grid.device)
         
         zz, yy, xx = torch.meshgrid(z_coords, y_coords, x_coords, indexing='ij')
         grid_coords = torch.stack([zz, yy, xx], dim=-1)  # (D, H, W, 3)
         
         if self.binary_occupancy:
             # STE Implementation with non-uniform finite differences
-            conf_continuous = self.get_confidence()
+            conf_continuous = torch.sigmoid(c_grid)
             
             with torch.no_grad():
-                conf_binary = (torch.sigmoid(self.c_grid) > 0.5).float()
+                conf_binary = (torch.sigmoid(c_grid) > 0.5).float()
             
             self.binary_c_grid = conf_binary
             
@@ -324,7 +485,7 @@ class ConfidenceField(nn.Module):
             grad_z = grad_z_bin.detach() + (grad_z_cont - grad_z_cont.detach())
         else:
             # Standard non-uniform finite differences on smooth sigmoid
-            conf = self.get_confidence()
+            conf = torch.sigmoid(c_grid)
             self.binary_c_grid = None
             
             grad_x = self._compute_gradient_axis_non_uniform(conf, grid_coords, axis=2)
@@ -337,8 +498,17 @@ class ConfidenceField(nn.Module):
         grad_z = grad_z.unsqueeze(0).unsqueeze(0)
         
         # Store gradient grid
-        self.grad_c_grid = torch.cat([grad_x, grad_y, grad_z], dim=1)
-    
+        grad_grid = torch.cat([grad_x, grad_y, grad_z], dim=1)
+        
+        return grad_grid
+
+    def _compute_gradient_non_uniform(self):
+        """
+        DEPRECATED: This method is replaced by _compute_gradient_non_uniform_single().
+        Kept for reference but should not be used.
+        """
+        raise RuntimeError("This method is deprecated. Use _compute_gradient_non_uniform_single() instead.")
+
     def _compute_gradient_axis_non_uniform(self, conf_values, grid_coords, axis):
         """
         Compute gradient along a specific axis using non-uniform finite differences.
@@ -361,14 +531,31 @@ class ConfidenceField(nn.Module):
 
     def compute_gradient(self):
         """
-        Computes the gradient of the confidence grid using either uniform or non-uniform finite differences.
+        Computes the gradient of the base confidence grid using either uniform or non-uniform finite differences.
+        For multi-resolution mode, only the base (highest resolution) grid has gradients since that's the only 
+        learnable parameter. Lower resolution grids are generated by downsampling.
+        
         If binary_occupancy is enabled, uses Straight-Through Estimator (STE) to 
         compute gradients from binary occupancy values while maintaining gradient flow.
         This is a pre-computation step that should be done once per training iteration.
         """
+        # Always compute gradient only for the base grid (the learnable parameter)
+        self._compute_base_grid_gradient()
+        
+        # Invalidate downsampled grid cache since the base grid may have changed
+        self._invalidate_cache()
+    
+    def _compute_base_grid_gradient(self):
+        """
+        Compute gradient for the base (highest resolution) grid.
+        """
+        current_resolution = self.base_resolution
+        c_grid = self.c_grid
+            
         # Check if we should use non-uniform finite differences
         if self.non_uniform_cells and not self.analytical_gradient:
-            self._compute_gradient_non_uniform()
+            grad_grid = self._compute_gradient_non_uniform_single(0, current_resolution, c_grid)
+            self.grad_c_grid = grad_grid
             return
             
         # Original uniform finite difference computation
@@ -378,11 +565,11 @@ class ConfidenceField(nn.Module):
             # STE Implementation: Binary values in forward pass, continuous gradients in backward pass
             
             # Step 1: Compute continuous confidence field (for backward pass)
-            conf_continuous = self.get_confidence().unsqueeze(0).unsqueeze(0)  # (1, 1, D, H, W)
+            conf_continuous = torch.sigmoid(c_grid).unsqueeze(0).unsqueeze(0)  # (1, 1, D, H, W)
             
             # Step 2: Compute binary confidence field (for forward pass)
             with torch.no_grad():
-                conf_binary = (torch.sigmoid(self.c_grid) > 0.5).float().unsqueeze(0).unsqueeze(0)
+                conf_binary = (torch.sigmoid(c_grid) > 0.5).float().unsqueeze(0).unsqueeze(0)
             
             # Store binary occupancy grid for query method
             self.binary_c_grid = conf_binary.squeeze(0).squeeze(0)  # (D, H, W)
@@ -416,10 +603,10 @@ class ConfidenceField(nn.Module):
             
             # Apply grid spacing correction
             if self.contraction_aware_gradients:
-                grad_x, grad_y, grad_z = self._apply_contraction_aware_scaling(grad_x, grad_y, grad_z)
+                grad_x, grad_y, grad_z = self._apply_contraction_aware_scaling_single(grad_x, grad_y, grad_z, current_resolution)
             else:
                 # Original uniform spacing correction for [-1, 1] coordinates
-                D, H, W = self.resolution
+                D, H, W = current_resolution
                 scale_z = (D - 1) / 2.0  # 1 / grid_spacing_z
                 scale_y = (H - 1) / 2.0  # 1 / grid_spacing_y  
                 scale_x = (W - 1) / 2.0  # 1 / grid_spacing_x
@@ -429,12 +616,12 @@ class ConfidenceField(nn.Module):
                 grad_z = grad_z * scale_z
             
             # Store gradient grid of shape (1, 3, D, H, W)
-            self.grad_c_grid = torch.cat([grad_x, grad_y, grad_z], dim=1)
+            grad_grid = torch.cat([grad_x, grad_y, grad_z], dim=1)
             
         else:
             # Original smooth sigmoid implementation
             # (D, H, W) -> (1, 1, D, H, W)
-            conf = self.get_confidence().unsqueeze(0).unsqueeze(0) # Sigmoidal values
+            conf = torch.sigmoid(c_grid).unsqueeze(0).unsqueeze(0) # Sigmoidal values
             self.binary_c_grid = None  # Not used in smooth mode
 
             # Manually pad and then convolve, as padding_mode is not supported with tuple-based padding in this PyTorch version.
@@ -449,10 +636,10 @@ class ConfidenceField(nn.Module):
             
             # Apply grid spacing correction
             if self.contraction_aware_gradients:
-                grad_x, grad_y, grad_z = self._apply_contraction_aware_scaling(grad_x, grad_y, grad_z)
+                grad_x, grad_y, grad_z = self._apply_contraction_aware_scaling_single(grad_x, grad_y, grad_z, current_resolution)
             else:
                 # Original uniform spacing correction for [-1, 1] coordinates
-                D, H, W = self.resolution
+                D, H, W = current_resolution
                 scale_z = (D - 1) / 2.0  # 1 / grid_spacing_z
                 scale_y = (H - 1) / 2.0  # 1 / grid_spacing_y  
                 scale_x = (W - 1) / 2.0  # 1 / grid_spacing_x
@@ -462,7 +649,10 @@ class ConfidenceField(nn.Module):
                 grad_z = grad_z * scale_z
             
             # Store gradient grid of shape (1, 3, D, H, W)
-            self.grad_c_grid = torch.cat([grad_x, grad_y, grad_z], dim=1)
+            grad_grid = torch.cat([grad_x, grad_y, grad_z], dim=1)
+            
+        # Store the computed gradient
+        self.grad_c_grid = grad_grid
 
     def _apply_contraction_aware_scaling(self, grad_x, grad_y, grad_z):
         """
@@ -583,6 +773,126 @@ class ConfidenceField(nn.Module):
         
         return grad_x_final, grad_y_final, grad_z_final
 
+    def _apply_contraction_aware_scaling_single(self, grad_x, grad_y, grad_z, current_resolution):
+        """
+        Apply contraction-aware scaling to gradients computed via finite differences for a single grid.
+        
+        The key insight: after spatial contraction, grid cells don't represent uniform
+        world-space distances. We need to account for the contraction function's Jacobian.
+        
+        For spherical contraction (mip-NeRF 360):
+        - Points inside unit sphere: mapped nearly linearly  
+        - Points outside unit sphere: compressed into shell [1, 2]
+        
+        For cubic contraction (MeRF):
+        - Points inside unit cube: mapped linearly
+        - Points outside unit cube: compressed using L∞ norm scaling
+        
+        Args:
+            grad_x, grad_y, grad_z: Raw gradients from finite differences
+            current_resolution: The resolution of the grid being processed.
+            
+        Returns:
+            Scaled gradients that account for non-uniform spacing
+        """
+        D, H, W = current_resolution
+        
+        # Create coordinate grids in [-1, 1] (contracted space)
+        z_coords = torch.linspace(-1, 1, D, device=grad_x.device)
+        y_coords = torch.linspace(-1, 1, H, device=grad_x.device)  
+        x_coords = torch.linspace(-1, 1, W, device=grad_x.device)
+        
+        # Create meshgrid for all grid points
+        zz, yy, xx = torch.meshgrid(z_coords, y_coords, x_coords, indexing='ij')
+        grid_coords = torch.stack([zz, yy, xx], dim=-1)  # (D, H, W, 3)
+        
+        if self.non_spherical_contraction:
+            # Cubic contraction scaling (MeRF) following coord.py formulation
+            # contract𝜋(x)𝑗 = {
+            #   𝑥𝑗                                if ∥x∥∞≤1
+            #   𝑥𝑗/∥x∥∞                          if 𝑥𝑗 ≠ ∥x∥∞> 1  
+            #   (2 - 1/|𝑥𝑗|) * 𝑥𝑗/|𝑥𝑗|         if 𝑥𝑗= ∥x∥∞> 1
+            # }
+            
+            eps = 1e-8
+            abs_coords = torch.abs(grid_coords)  # (D, H, W, 3)
+            coord_norm_inf = torch.max(abs_coords, dim=-1, keepdim=True)[0]  # (D, H, W, 1)
+            
+            # Case 1: Inside unit cube ∥x∥∞≤1
+            mask_inside = coord_norm_inf <= 1.0
+            
+            # Case 2 & 3: Outside unit cube ∥x∥∞> 1
+            # Determine which coordinates are the max coordinate
+            max_coord_mask = (abs_coords == coord_norm_inf) & (coord_norm_inf > 1.0)  # (D, H, W, 3)
+            
+            # Safe clamping for numerical stability
+            coord_norm_inf_safe = torch.clamp(coord_norm_inf, min=eps)
+            abs_coords_safe = torch.clamp(abs_coords, min=eps)
+            
+            # Scaling calculations for finite differences in contracted space:
+            # We need the inverse Jacobian to convert contracted-space gradients to world-space
+            # Case 1: df/dx = 1 → scaling = 1/1 = 1
+            # Case 2: df/dx ≈ 1/∥x∥∞ → scaling = 1/(1/∥x∥∞) = ∥x∥∞  
+            # Case 3: df/dx = 1/|𝑥𝑗|² → scaling = 1/(1/|𝑥𝑗|²) = |𝑥𝑗|²
+            
+            scale_identity = torch.ones_like(abs_coords)  # Case 1: identity
+            scale_non_max = coord_norm_inf_safe.expand_as(abs_coords)  # Case 2: ||x||∞
+            scale_max = abs_coords_safe ** 2  # Case 3: |x_j|²
+            
+            # Apply the appropriate scaling based on the region
+            scaling_factor_per_coord = torch.where(
+                mask_inside.expand_as(abs_coords),
+                scale_identity,  # Inside: identity scaling
+                torch.where(
+                    max_coord_mask,
+                    scale_max,      # Max coordinate outside: 1/|x_j|²
+                    scale_non_max   # Non-max coordinate outside: 1/∥x∥∞
+                )
+            )  # (D, H, W, 3)
+            
+            # For gradient scaling, use geometric mean of coordinate scalings
+            # This preserves the relative scaling relationships better than arithmetic mean
+            scaling_factor_log = torch.log(scaling_factor_per_coord + eps)
+            scaling_factor = torch.exp(torch.mean(scaling_factor_log, dim=-1, keepdim=True))  # (D, H, W, 1)
+            
+        else:
+            # Spherical contraction scaling (mip-NeRF 360)
+            # Use L2 norm
+            coord_norm = torch.norm(grid_coords, dim=-1, keepdim=True)  # (D, H, W, 1)
+            
+            # For spherical contraction: f(x) = x if |x|≤1, else (2√|x| - 1)/|x|² * x
+            # The dominant scaling factor for |x| > 1 is approximately |x|²
+            # We need the inverse Jacobian: scaling ≈ |x|² for contracted regions
+            eps = 1e-8
+            coord_norm_safe = torch.clamp(coord_norm, min=eps)
+            
+            scaling_factor = torch.where(
+                coord_norm <= 1.0,
+                torch.ones_like(coord_norm),  # Linear region: no scaling needed
+                coord_norm_safe ** 2  # Contracted region: |x|² scaling
+            )
+        
+        # Apply scaling to gradients
+        # Note: This is a simplified approach. A full solution would compute the exact Jacobian.
+        scaling_factor = scaling_factor.squeeze(-1)  # (D, H, W)
+        scaling_factor = scaling_factor.unsqueeze(0).unsqueeze(0)  # (1, 1, D, H, W)
+        
+        # Scale gradients by the contraction factor
+        grad_x_scaled = grad_x * scaling_factor
+        grad_y_scaled = grad_y * scaling_factor  
+        grad_z_scaled = grad_z * scaling_factor
+        
+        # Still apply the basic grid spacing correction for [-1, 1] coordinates
+        base_scale_z = (D - 1) / 2.0
+        base_scale_y = (H - 1) / 2.0
+        base_scale_x = (W - 1) / 2.0
+        
+        grad_x_final = grad_x_scaled * base_scale_x
+        grad_y_final = grad_y_scaled * base_scale_y
+        grad_z_final = grad_z_scaled * base_scale_z
+        
+        return grad_x_final, grad_y_final, grad_z_final
+
     def get_analytical_gradient_at_points(self, points_normalized):
         """
         Compute exact analytical gradients at specified points using explicit trilinear interpolation.
@@ -597,7 +907,7 @@ class ConfidenceField(nn.Module):
             occupancy: (N, 1) tensor of sigmoid(logits(p)) values
         """
         N = points_normalized.shape[0]
-        D, H, W = self.resolution
+        D, H, W = self.base_resolution
         
         # Convert [-1, 1] coordinates to grid indices [0, D-1], [0, H-1], [0, W-1]
         # grid_sample uses: coord = -1 maps to index 0, coord = 1 maps to index D-1
@@ -701,6 +1011,7 @@ class ConfidenceField(nn.Module):
         """
         Interpolates the confidence and its gradient at given points.
         When binary_occupancy is enabled, returns binary occupancy values (0 or 1).
+        For multi-resolution mode, samples from downsampled versions of the base grid and combines the results.
         
         Args:
             points: (N, 3) tensor of points in the range [-1, 1].
@@ -708,15 +1019,66 @@ class ConfidenceField(nn.Module):
             sampled_conf: (N, 1) tensor of confidence/occupancy values.
             sampled_grad: (N, 3) tensor of gradient values.
         """
+        if not self.use_multi_resolution:
+            # Single resolution mode (legacy)
+            return self._query_base_grid(points)
+        
+        # Multi-resolution mode
+        # Generate downsampled grids if needed
+        if not self._cache_valid:
+            self._generate_downsampled_grids()
+        
+        # Sample from all resolution levels
+        all_confidences = []
+        all_gradients = []
+        
+        for i in range(self.num_grids):
+            conf_i, grad_i = self._query_resolution_level(points, i)
+            all_confidences.append(conf_i)  # (N, 1)
+            all_gradients.append(grad_i)    # (N, 3)
+        
+        # Combine confidences
+        if self.combination_method == "sum":
+            # Simple sum of all confidence values
+            sampled_conf = sum(all_confidences)  # (N, 1)
+            # Average gradients (they should be similar since they come from the same base grid)
+            sampled_grad = sum(all_gradients) / len(all_gradients)  # (N, 3)
+        elif self.combination_method == "mlp":
+            # Concatenate and pass through MLP
+            conf_features = torch.cat(all_confidences, dim=-1)  # (N, num_grids)
+            sampled_conf = self.combination_mlp(conf_features)  # (N, 1)
+            # For gradients, we average them (could make this learnable too)
+            sampled_grad = sum(all_gradients) / len(all_gradients)  # (N, 3)
+        else:
+            raise ValueError(f"Unknown combination method: {self.combination_method}")
+        
+        return sampled_conf, sampled_grad
+    
+    def _query_base_grid(self, points):
+        """
+        Query the base confidence grid directly (single-resolution mode).
+        
+        Args:
+            points: (N, 3) tensor of points in the range [-1, 1]
+            
+        Returns:
+            sampled_conf: (N, 1) tensor of confidence values
+            sampled_grad: (N, 3) tensor of gradient values
+        """
         # `grid_sample` expects coordinates in [-1, 1]
         # points should be (N, 1, 1, 1, 3) for 3D grid_sample
         points_for_grid_sample = points.view(1, -1, 1, 1, 3)
 
+        # Use the base grid
+        c_grid = self.c_grid
+        binary_c_grid = self.binary_c_grid
+        grad_c_grid = self.grad_c_grid
+
         # Interpolate confidence/occupancy
-        if self.binary_occupancy and self.binary_c_grid is not None:
+        if self.binary_occupancy and binary_c_grid is not None:
             # Use STE: binary values in forward pass, continuous gradients in backward pass
-            binary_grid = self.binary_c_grid.unsqueeze(0).unsqueeze(0)  # (1, 1, D, H, W)
-            continuous_grid = self.get_confidence().unsqueeze(0).unsqueeze(0)  # (1, 1, D, H, W)
+            binary_grid = binary_c_grid.unsqueeze(0).unsqueeze(0)  # (1, 1, D, H, W)
+            continuous_grid = torch.sigmoid(c_grid).unsqueeze(0).unsqueeze(0)  # (1, 1, D, H, W)
             
             # Sample from both grids
             sampled_binary = F.grid_sample(binary_grid, points_for_grid_sample, align_corners=True, mode='bilinear')
@@ -727,7 +1089,7 @@ class ConfidenceField(nn.Module):
             sampled_conf = sampled_conf.view(-1, 1)  # (N, 1)
         else:
             # Use continuous confidence values
-            conf_grid = self.get_confidence().unsqueeze(0).unsqueeze(0)  # (1, 1, D, H, W)
+            conf_grid = torch.sigmoid(c_grid).unsqueeze(0).unsqueeze(0)  # (1, 1, D, H, W)
             sampled_conf = F.grid_sample(conf_grid, points_for_grid_sample, align_corners=True, mode='bilinear')
             sampled_conf = sampled_conf.view(-1, 1) # (N, 1)
 
@@ -737,15 +1099,71 @@ class ConfidenceField(nn.Module):
             analytical_grad, analytical_occupancy = self.get_analytical_gradient_at_points(points)
             sampled_grad = analytical_grad  # (N, 3)
             
-            # For consistency, we could optionally use the analytical occupancy instead of sampled_conf
-            # but for now we keep the existing confidence computation to maintain compatibility
-            
         else:
             # Use pre-computed stencil-based gradients
+            if grad_c_grid is None:
+                raise RuntimeError("Gradient must be computed before querying when using stencil-based gradients.")
+                
+            # grad_c_grid is (1, 3, D, H, W)
+            sampled_grad = F.grid_sample(grad_c_grid, points_for_grid_sample, align_corners=True, mode='bilinear')
+            
+            # (1, 3, N, 1, 1) -> (N, 3)
+            sampled_grad = sampled_grad.view(3, -1).permute(1, 0)
+        
+        return sampled_conf, sampled_grad
+    
+    def _query_resolution_level(self, points, level_index):
+        """
+        Query a specific resolution level using downsampled grids.
+        
+        Args:
+            points: (N, 3) tensor of points in the range [-1, 1]
+            level_index: Index of the resolution level to query
+            
+        Returns:
+            sampled_conf: (N, 1) tensor of confidence values
+            sampled_grad: (N, 3) tensor of gradient values
+        """
+        # `grid_sample` expects coordinates in [-1, 1]
+        points_for_grid_sample = points.view(1, -1, 1, 1, 3)
+        
+        # Get the downsampled confidence grid for this level
+        conf_grid = self._cached_downsampled_grids[level_index]
+        
+        # For binary occupancy, apply it to the downsampled grid
+        if self.binary_occupancy:
+            # Create binary version of the downsampled grid
+            with torch.no_grad():
+                binary_grid = (conf_grid > 0.5).float()
+            
+            binary_grid = binary_grid.unsqueeze(0).unsqueeze(0)  # (1, 1, D, H, W)
+            continuous_grid = conf_grid.unsqueeze(0).unsqueeze(0)  # (1, 1, D, H, W)
+            
+            # Sample from both grids
+            sampled_binary = F.grid_sample(binary_grid, points_for_grid_sample, align_corners=True, mode='bilinear')
+            sampled_continuous = F.grid_sample(continuous_grid, points_for_grid_sample, align_corners=True, mode='bilinear')
+            
+            # Apply STE: binary values + (continuous - continuous.detach())
+            sampled_conf = sampled_binary.detach() + (sampled_continuous - sampled_continuous.detach())
+            sampled_conf = sampled_conf.view(-1, 1)  # (N, 1)
+        else:
+            # Use continuous confidence values
+            conf_grid_expanded = conf_grid.unsqueeze(0).unsqueeze(0)  # (1, 1, D, H, W)
+            sampled_conf = F.grid_sample(conf_grid_expanded, points_for_grid_sample, align_corners=True, mode='bilinear')
+            sampled_conf = sampled_conf.view(-1, 1) # (N, 1)
+
+        # For gradients, we use the base grid gradient since all levels are derived from it
+        # This makes sense because the gradient direction should be consistent across scales
+        if self.analytical_gradient:
+            # Use analytical gradient computation (autograd-based)
+            analytical_grad, analytical_occupancy = self.get_analytical_gradient_at_points(points)
+            sampled_grad = analytical_grad  # (N, 3)
+        else:
+            # Use pre-computed stencil-based gradients from base grid
             if self.grad_c_grid is None:
                 raise RuntimeError("Gradient must be computed before querying when using stencil-based gradients.")
                 
-            # self.grad_c_grid is (1, 3, D, H, W)
+            # grad_c_grid is (1, 3, D, H, W) - base resolution
             sampled_grad = F.grid_sample(self.grad_c_grid, points_for_grid_sample, align_corners=True, mode='bilinear')
             
             # (1, 3, N, 1, 1) -> (N, 3)
@@ -756,8 +1174,19 @@ class ConfidenceField(nn.Module):
     def get_regularization_loss(self):
         """Computes the binarity-promoting regularization loss."""
         C = self.get_confidence()
-        loss_reg = torch.mean(-C * torch.log(C + 1e-8) - (1-C) * torch.log(1-C + 1e-8))
-        return loss_reg 
+        
+        if self.use_multi_resolution:
+            # C is a list of tensors, compute loss for each grid and average
+            losses = []
+            for c_grid in C:
+                loss_i = torch.mean(-c_grid * torch.log(c_grid + 1e-8) - (1-c_grid) * torch.log(1-c_grid + 1e-8))
+                losses.append(loss_i)
+            loss_reg = torch.mean(torch.stack(losses))
+        else:
+            # C is a single tensor (legacy mode)
+            loss_reg = torch.mean(-C * torch.log(C + 1e-8) - (1-C) * torch.log(1-C + 1e-8))
+        
+        return loss_reg
     
     # ADMM Pruner Methods
     def get_current_sparsity(self):

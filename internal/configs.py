@@ -26,7 +26,14 @@ class Config:
     """Configuration flags for everything."""
     use_triplane: bool = False
     use_potential: bool = False
-    confidence_grid_resolution: Tuple[int, int, int] = (128, 128, 128)
+    
+    # Multi-resolution confidence grid settings
+    confidence_grid_resolution: Tuple[int, int, int] = (128, 128, 128)  # Legacy single resolution (kept for backward compatibility)
+    confidence_grid_resolutions: Optional[List[Tuple[int, int, int]]] = None  # Multi-resolution grids, e.g., [(16,16,16), (32,32,32), (64,64,64)] - set to None for single-resolution mode
+    confidence_combination_method: str = "mlp"  # "mlp" or "sum" - how to combine multi-resolution features
+    confidence_mlp_hidden_dim: int = 32  # Hidden dimension for confidence combination MLP
+    confidence_mlp_num_layers: int = 2  # Number of layers in confidence combination MLP
+    
     confidence_reg_mult: float = 0.0  # Multiplier for confidence field regularization loss
     binary_occupancy: bool = False  # If True, use binary occupancy with STE instead of smooth sigmoid
     analytical_gradient: bool = False  # If True, use analytical gradient (autograd) instead of stencil-based finite differences

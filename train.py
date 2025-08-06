@@ -403,13 +403,30 @@ def main(unused_argv):
                 # Log confidence grid L1 norm directly for sparsity tracking
                 with torch.no_grad():
                     conf_sigmoid = module.confidence_field.get_confidence()
-                    # Direct L1 norm of confidence grid (shows total "mass" in grid)
-                    stats['confidence_l1_norm'] = conf_sigmoid.sum().item()
-                    stats['confidence_mean'] = conf_sigmoid.mean().item()
-                    # Count how many voxels are above certain thresholds (measures scene density)
-                    stats['confidence_active_01'] = (conf_sigmoid > 0.1).float().mean().item()
-                    stats['confidence_active_05'] = (conf_sigmoid > 0.5).float().mean().item()
-                    stats['confidence_active_09'] = (conf_sigmoid > 0.9).float().mean().item()
+                    
+                    if module.confidence_field.use_multi_resolution:
+                        # Multi-resolution: conf_sigmoid is a list of tensors
+                        # Concatenate all grids for overall statistics
+                        all_conf = torch.cat([c.flatten() for c in conf_sigmoid])
+                        
+                        # Overall statistics
+                        stats['confidence_l1_norm'] = all_conf.sum().item()
+                        stats['confidence_mean'] = all_conf.mean().item()
+                        stats['confidence_active_01'] = (all_conf > 0.1).float().mean().item()
+                        stats['confidence_active_05'] = (all_conf > 0.5).float().mean().item()
+                        stats['confidence_active_09'] = (all_conf > 0.9).float().mean().item()
+                        
+                        # Per-grid statistics (optional, for debugging)
+                        for i, c_grid in enumerate(conf_sigmoid):
+                            stats[f'confidence_grid_{i}_mean'] = c_grid.mean().item()
+                            stats[f'confidence_grid_{i}_l1'] = c_grid.sum().item()
+                    else:
+                        # Single-resolution: conf_sigmoid is a tensor (legacy mode)
+                        stats['confidence_l1_norm'] = conf_sigmoid.sum().item()
+                        stats['confidence_mean'] = conf_sigmoid.mean().item()
+                        stats['confidence_active_01'] = (conf_sigmoid > 0.1).float().mean().item()
+                        stats['confidence_active_05'] = (conf_sigmoid > 0.5).float().mean().item()
+                        stats['confidence_active_09'] = (conf_sigmoid > 0.9).float().mean().item()
             
             # ADMM Pruner for confidence field sparsity
             if (config.use_admm_pruner and hasattr(module, 'confidence_field') and 

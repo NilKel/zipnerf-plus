@@ -99,7 +99,7 @@ class Model(nn.Module):
     num_prop_samples: int = 64  # The number of samples for each proposal level.
     num_nerf_samples: int = 32  # The number of samples the final nerf level.
     num_levels: int = 3  # The number of sampling levels (3==2 proposals, 1 nerf).
-    bg_intensity_range = (1., 1.)  # The range of background colors.
+    bg_intensity_range = (0., 0.)  # The range of background colors.
     anneal_slope: float = 10  # Higher = more rapid annealing.
     stop_level_grad: bool = True  # If True, don't backprop across levels.
     use_viewdirs: bool = True  # If True, use view directions as input.
@@ -149,16 +149,49 @@ class Model(nn.Module):
             needs_confidence_field = needs_confidence_field or bool(getattr(config, 'debug_confidence_grid_path', None))
         
         if needs_confidence_field:
-            self.confidence_field = ConfidenceField(
-                resolution=self.config.confidence_grid_resolution, 
-                device='cuda' if not self.config.dpcpp_backend else 'xpu',
-                pretrained_grid_path=self.config.debug_confidence_grid_path,
-                freeze_pretrained=self.config.freeze_debug_confidence,
-                binary_occupancy=self.config.binary_occupancy,
-                analytical_gradient=self.config.analytical_gradient,
-                use_admm_pruner=self.config.use_admm_pruner,
-                contraction_aware_gradients=self.config.contraction_aware_gradients
+            # Determine if we should use multi-resolution confidence grids
+            use_multi_res = (
+                hasattr(self.config, 'confidence_grid_resolutions') and 
+                self.config.confidence_grid_resolutions is not None and 
+                len(self.config.confidence_grid_resolutions) > 0
             )
+            
+            if use_multi_res:
+                # Multi-resolution mode
+                self.confidence_field = ConfidenceField(
+                    resolution=self.config.confidence_grid_resolution,  # Keep legacy param for backward compatibility
+                    resolutions=self.config.confidence_grid_resolutions,
+                    combination_method=getattr(self.config, 'confidence_combination_method', 'mlp'),
+                    mlp_hidden_dim=getattr(self.config, 'confidence_mlp_hidden_dim', 32),
+                    mlp_num_layers=getattr(self.config, 'confidence_mlp_num_layers', 2),
+                    device='cuda' if not self.config.dpcpp_backend else 'xpu',
+                    pretrained_grid_path=self.config.debug_confidence_grid_path,
+                    freeze_pretrained=self.config.freeze_debug_confidence,
+                    binary_occupancy=self.config.binary_occupancy,
+                    analytical_gradient=self.config.analytical_gradient,
+                    use_admm_pruner=self.config.use_admm_pruner,
+                    contraction_aware_gradients=self.config.contraction_aware_gradients,
+                    non_spherical_contraction=getattr(self.config, 'non_spherical_contraction', False),
+                    non_uniform_cells=getattr(self.config, 'non_uniform_cells', False)
+                )
+                print(f"🔧 Initialized multi-resolution confidence field with {len(self.config.confidence_grid_resolutions)} grids:")
+                for i, res in enumerate(self.config.confidence_grid_resolutions):
+                    print(f"   Grid {i}: {res[0]}³")
+                print(f"   Combination method: {getattr(self.config, 'confidence_combination_method', 'mlp')}")
+            else:
+                # Single resolution mode (legacy)
+                self.confidence_field = ConfidenceField(
+                    resolution=self.config.confidence_grid_resolution, 
+                    device='cuda' if not self.config.dpcpp_backend else 'xpu',
+                    pretrained_grid_path=self.config.debug_confidence_grid_path,
+                    freeze_pretrained=self.config.freeze_debug_confidence,
+                    binary_occupancy=self.config.binary_occupancy,
+                    analytical_gradient=self.config.analytical_gradient,
+                    use_admm_pruner=self.config.use_admm_pruner,
+                    contraction_aware_gradients=self.config.contraction_aware_gradients,
+                    non_spherical_contraction=getattr(self.config, 'non_spherical_contraction', False),
+                    non_uniform_cells=getattr(self.config, 'non_uniform_cells', False)
+                )
         else:
             self.confidence_field = None
 
@@ -404,7 +437,7 @@ class Model(nn.Module):
                 minval = self.bg_intensity_range[0]
                 maxval = self.bg_intensity_range[1]
                 bg_rgbs = torch.rand(weights.shape[:-1] + (3,), device=device) * (maxval - minval) + minval
-
+            
             # RawNeRF exposure logic.
             if batch.get('exposure_idx') is not None:
                 # Scale output colors by the exposure.
