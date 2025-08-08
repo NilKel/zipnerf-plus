@@ -3,16 +3,24 @@ Config.dataset_loader = 'llff'
 Config.near = 0.2
 Config.far = 1e6
 Config.factor = 4
-Config.comment = 'sph_32cf'
+Config.comment = 'nonuniform_contmean_32'
 Config.use_potential = True
 Config.use_triplane = False
 Config.binary_occupancy = False
-Config.confidence_grid_resolution = (32, 32, 32)
+# Config.confidence_grid_resolution = (16, 16, 16)
+ Config.confidence_grid_resolution = (32, 32, 32)
+# Config.confidence_grid_resolutions = [(16,16,16),(32,32,32), (64,64,64)]
+Config.confidence_combination_method = "sum"
 Config.confidence_distortion_loss_mult = 0.00
 
 Config.non_spherical_contraction = False
-Config.non_uniform_cells = False
+Config.non_uniform_cells = True
 Config.contraction_aware_gradients = False
+
+# RGB modulation with occupancy gradient (experimental)
+Config.use_occupancy_gradient_modulation = False  # Set to True to enable
+Config.rgb_modulation_output_dim = 9  # 3x3 matrix per sample that gets multiplied by occupancy gradient
+Config.alpha_blend_gradient_subtraction_mult = 1.0  # Gradient subtraction term
 
 Config.batch_size = 8196
 Config.max_steps = 25000

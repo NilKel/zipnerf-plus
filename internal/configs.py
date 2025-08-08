@@ -53,6 +53,11 @@ class Config:
     admm_start_step: int = 1000  # Step to start ADMM pruning (allow initial training first)
     admm_log_every: int = 100  # Log ADMM metrics every N steps
     gating: bool = False
+
+    # New flags for RGB modulation with occupancy gradient
+    use_occupancy_gradient_modulation: bool = False # If True, enables the experimental RGB modulation with occupancy gradients
+    rgb_modulation_output_dim: int = 9 # Output dimension for RGB MLP when using gradient modulation (3x3 matrix per sample)
+    alpha_blend_gradient_subtraction_mult: float = 1.0 # Multiplier for the gradient subtraction term in RGB modulation
     
     # Spatial contraction settings
     non_spherical_contraction: bool = False  # If True, use MeRF's cubic contraction instead of mip-NeRF 360's spherical contraction

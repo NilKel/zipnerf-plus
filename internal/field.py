@@ -320,18 +320,19 @@ class ConfidenceField(nn.Module):
             # Return all grids as list
             return [self._cached_downsampled_grids[i] for i in range(self.num_grids)]
 
-    def _compute_world_space_intervals(self, grid_coords, axis):
+    def _compute_world_space_intervals(self, grid_coords, axis, current_resolution):
         """
         Compute world-space intervals between adjacent grid points for non-uniform finite differences.
         
         Args:
             grid_coords: (D, H, W, 3) tensor of contracted space coordinates
             axis: 0=z, 1=y, 2=x - which axis to compute intervals for
+            current_resolution: (D, H, W) tuple for the current grid resolution
             
         Returns:
             h_left, h_right: (D, H, W) tensors of world-space distances to left/right neighbors
         """
-        D, H, W = self.resolution
+        D, H, W = current_resolution
         device = grid_coords.device
         
         # Create coordinate shifts for left and right neighbors
@@ -363,7 +364,7 @@ class ConfidenceField(nn.Module):
         
         return h_left, h_right
     
-    def _apply_sundqvist_veronis_stencil(self, conf_values, h_left, h_right, axis):
+    def _apply_sundqvist_veronis_stencil(self, conf_values, h_left, h_right, axis, current_resolution):
         """
         Apply the Sundqvist & Veronis (1970) finite difference formula for non-uniform grids.
         
@@ -373,33 +374,34 @@ class ConfidenceField(nn.Module):
             conf_values: (D, H, W) tensor of confidence values
             h_left, h_right: (D, H, W) tensors of world-space intervals
             axis: 0=z, 1=y, 2=x - which axis to compute derivative for
+            current_resolution: (D, H, W) tuple for the current grid resolution
             
         Returns:
             grad: (D, H, W) tensor of gradients along the specified axis
         """
-        D, H, W = self.resolution
+        D, H, W = current_resolution
         eps = 1e-8
         
         # Get neighbor values by padding and shifting
         if axis == 0:  # z-axis
-            conf_left = F.pad(conf_values, (0, 0, 0, 0, 1, 0), mode='replicate')[:-1, :, :]
-            conf_right = F.pad(conf_values, (0, 0, 0, 0, 0, 1), mode='replicate')[1:, :, :]
+            conf_left = F.pad(conf_values, (0, 0, 0, 0, 1, 0), mode='constant', value=0)[:-1, :, :]
+            conf_right = F.pad(conf_values, (0, 0, 0, 0, 0, 1), mode='constant', value=0)[1:, :, :]
             h_left = h_left[1:-1] if D > 2 else h_left  # Exclude boundary points
             h_right = h_right[1:-1] if D > 2 else h_right
             conf_center = conf_values[1:-1] if D > 2 else conf_values
             conf_left = conf_left[1:-1] if D > 2 else conf_left
             conf_right = conf_right[1:-1] if D > 2 else conf_right
         elif axis == 1:  # y-axis
-            conf_left = F.pad(conf_values, (0, 0, 1, 0), mode='replicate')[:, :-1, :]
-            conf_right = F.pad(conf_values, (0, 0, 0, 1), mode='replicate')[:, 1:, :]
+            conf_left = F.pad(conf_values, (0, 0, 1, 0), mode='constant', value=0)[:, :-1, :]
+            conf_right = F.pad(conf_values, (0, 0, 0, 1), mode='constant', value=0)[:, 1:, :]
             h_left = h_left[:, 1:-1] if H > 2 else h_left
             h_right = h_right[:, 1:-1] if H > 2 else h_right
             conf_center = conf_values[:, 1:-1] if H > 2 else conf_values
             conf_left = conf_left[:, 1:-1] if H > 2 else conf_left
             conf_right = conf_right[:, 1:-1] if H > 2 else conf_right
         elif axis == 2:  # x-axis
-            conf_left = F.pad(conf_values, (1, 0), mode='replicate')[:, :, :-1]
-            conf_right = F.pad(conf_values, (0, 1), mode='replicate')[:, :, 1:]
+            conf_left = F.pad(conf_values, (1, 0), mode='constant', value=0)[:, :, :-1]
+            conf_right = F.pad(conf_values, (0, 1), mode='constant', value=0)[:, :, 1:]
             h_left = h_left[:, :, 1:-1] if W > 2 else h_left
             h_right = h_right[:, :, 1:-1] if W > 2 else h_right
             conf_center = conf_values[:, :, 1:-1] if W > 2 else conf_values
@@ -471,13 +473,13 @@ class ConfidenceField(nn.Module):
             self.binary_c_grid = conf_binary
             
             # Compute gradients for both continuous and binary versions
-            grad_x_cont = self._compute_gradient_axis_non_uniform(conf_continuous, grid_coords, axis=2)
-            grad_y_cont = self._compute_gradient_axis_non_uniform(conf_continuous, grid_coords, axis=1)
-            grad_z_cont = self._compute_gradient_axis_non_uniform(conf_continuous, grid_coords, axis=0)
+            grad_x_cont = self._compute_gradient_axis_non_uniform(conf_continuous, grid_coords, axis=2, current_resolution=current_resolution)
+            grad_y_cont = self._compute_gradient_axis_non_uniform(conf_continuous, grid_coords, axis=1, current_resolution=current_resolution)
+            grad_z_cont = self._compute_gradient_axis_non_uniform(conf_continuous, grid_coords, axis=0, current_resolution=current_resolution)
             
-            grad_x_bin = self._compute_gradient_axis_non_uniform(conf_binary, grid_coords, axis=2)
-            grad_y_bin = self._compute_gradient_axis_non_uniform(conf_binary, grid_coords, axis=1)
-            grad_z_bin = self._compute_gradient_axis_non_uniform(conf_binary, grid_coords, axis=0)
+            grad_x_bin = self._compute_gradient_axis_non_uniform(conf_binary, grid_coords, axis=2, current_resolution=current_resolution)
+            grad_y_bin = self._compute_gradient_axis_non_uniform(conf_binary, grid_coords, axis=1, current_resolution=current_resolution)
+            grad_z_bin = self._compute_gradient_axis_non_uniform(conf_binary, grid_coords, axis=0, current_resolution=current_resolution)
             
             # Apply STE: binary values with continuous gradients
             grad_x = grad_x_bin.detach() + (grad_x_cont - grad_x_cont.detach())
@@ -488,9 +490,9 @@ class ConfidenceField(nn.Module):
             conf = torch.sigmoid(c_grid)
             self.binary_c_grid = None
             
-            grad_x = self._compute_gradient_axis_non_uniform(conf, grid_coords, axis=2)
-            grad_y = self._compute_gradient_axis_non_uniform(conf, grid_coords, axis=1) 
-            grad_z = self._compute_gradient_axis_non_uniform(conf, grid_coords, axis=0)
+            grad_x = self._compute_gradient_axis_non_uniform(conf, grid_coords, axis=2, current_resolution=current_resolution)
+            grad_y = self._compute_gradient_axis_non_uniform(conf, grid_coords, axis=1, current_resolution=current_resolution) 
+            grad_z = self._compute_gradient_axis_non_uniform(conf, grid_coords, axis=0, current_resolution=current_resolution)
         
         # Add batch dimensions for consistency with convolution-based method
         grad_x = grad_x.unsqueeze(0).unsqueeze(0)  # (1, 1, D, H, W)
@@ -509,7 +511,7 @@ class ConfidenceField(nn.Module):
         """
         raise RuntimeError("This method is deprecated. Use _compute_gradient_non_uniform_single() instead.")
 
-    def _compute_gradient_axis_non_uniform(self, conf_values, grid_coords, axis):
+    def _compute_gradient_axis_non_uniform(self, conf_values, grid_coords, axis, current_resolution):
         """
         Compute gradient along a specific axis using non-uniform finite differences.
         
@@ -517,15 +519,16 @@ class ConfidenceField(nn.Module):
             conf_values: (D, H, W) tensor of confidence values
             grid_coords: (D, H, W, 3) tensor of contracted space coordinates  
             axis: 0=z, 1=y, 2=x - which axis to compute gradient for
+            current_resolution: (D, H, W) tuple for the current grid resolution
             
         Returns:
             grad: (D, H, W) tensor of gradients along the specified axis
         """
         # Compute world-space intervals
-        h_left, h_right = self._compute_world_space_intervals(grid_coords, axis)
+        h_left, h_right = self._compute_world_space_intervals(grid_coords, axis, current_resolution)
         
         # Apply Sundqvist & Veronis formula
-        grad = self._apply_sundqvist_veronis_stencil(conf_values, h_left, h_right, axis)
+        grad = self._apply_sundqvist_veronis_stencil(conf_values, h_left, h_right, axis, current_resolution)
         
         return grad
 
@@ -1040,7 +1043,7 @@ class ConfidenceField(nn.Module):
         # Combine confidences
         if self.combination_method == "sum":
             # Simple sum of all confidence values
-            sampled_conf = sum(all_confidences)  # (N, 1)
+            sampled_conf = sum(all_confidences) / len(all_confidences)  # (N, 1)
             # Average gradients (they should be similar since they come from the same base grid)
             sampled_grad = sum(all_gradients) / len(all_gradients)  # (N, 3)
         elif self.combination_method == "mlp":

@@ -464,7 +464,7 @@ class Model(nn.Module):
                     for k, v in ray_results.items()
                     if k.startswith('normals') or k in ['roughness']
                 })
-
+            
             if compute_extras:
                 # Collect some rays to visualize directly. By naming these quantities
                 # with `ray_` they get treated differently downstream --- they're
@@ -874,7 +874,7 @@ class MLP(nn.Module):
         self.density_layer = nn.Sequential(nn.Linear(last_dim, 64),
                                            nn.ReLU(),
                                            nn.Linear(64,
-                                                     1 if self.disable_rgb else self.bottleneck_width))  # Hardcoded to a single channel.
+                                                     1 if self.disable_rgb else self.bottleneck_width))
         last_dim = 1 if self.disable_rgb and not self.enable_pred_normals else self.bottleneck_width
         if self.enable_pred_normals:
             self.normal_layer = nn.Linear(last_dim, 3)
@@ -916,7 +916,13 @@ class MLP(nn.Module):
                 last_dim_rgb = self.net_width_viewdirs
                 if i == self.skip_layer_dir:
                     last_dim_rgb += input_dim_rgb
-            self.rgb_layer = nn.Linear(last_dim_rgb, self.num_rgb_channels)
+            
+            # Dynamically set num_rgb_channels based on config
+            if self.config is not None and getattr(self.config, 'use_occupancy_gradient_modulation', False):
+                final_rgb_output_dim = self.config.rgb_modulation_output_dim
+            else:
+                final_rgb_output_dim = self.num_rgb_channels
+            self.rgb_layer = nn.Linear(last_dim_rgb, final_rgb_output_dim)
 
     def predict_density(self, means, stds, rand=False, no_warp=False, confidence_field=None, training_step=None, store_g_features=False):
         """Helper function to output density."""
@@ -959,13 +965,13 @@ class MLP(nn.Module):
                 
                 # Get occupancy gradient
                 means_for_conf = means.view(-1, 3)
-                sampled_conf_raw, sampled_grad = confidence_field.query(means_for_conf)
+                sampled_conf, sampled_grad = confidence_field.query(means_for_conf)
                 
-                sampled_conf = sampled_conf.view(*hash_features_per_level.shape[:-3], 1, 1, 1) # (..., 1, 1, 1)
-                sampled_grad = sampled_grad.view(*hash_features_per_level.shape[:-3], 1, 1, 3) # (..., 1, 1, 3)
+                sampled_conf_reshaped = sampled_conf.view(*G.shape[:-2], 1, 1, 1) # (..., 1, 1, 1)
+                sampled_grad_reshaped = sampled_grad.view(*G.shape[:-2], 1, 1, 3) # (..., 1, 1, 3)
                 
                 # Dot product: G · grad_occ
-                dot_product = -torch.sum(G * sampled_grad, dim=-1)  # [..., output_dim_F]
+                dot_product = -torch.sum(G * sampled_grad_reshaped, dim=-1)  # [..., output_dim_F]
                 features = dot_product
                 
             else:
@@ -976,22 +982,23 @@ class MLP(nn.Module):
                 # Get positional features F of shape [..., output_dim]
                 F = self.encoder(means)
                 
-                # Get occupancy (sampled_conf is actually occupancy)
+                # Get occupancy and gradient
                 means_for_conf = means.view(-1, 3)
-                sampled_conf_raw, _ = confidence_field.query(means_for_conf)
+                sampled_conf, sampled_grad = confidence_field.query(means_for_conf)
                 
                 # Store the raw confidence values for distortion loss (shaped like means)
-                sampled_conf_unaveraged = sampled_conf_raw.view(*means.shape[:-1], 1)  # (..., num_samples, 1)
+                sampled_conf_unaveraged = sampled_conf.view(*means.shape[:-1], 1)  # (..., num_samples, 1)
                 
                 # Reshape for broadcasting in feature computation
-                sampled_conf_broadcast = sampled_conf_raw.view(*F.shape[:-1], 1)  # [..., 1]
+                sampled_conf_broadcast = sampled_conf.view(*F.shape[:-1], 1)  # [..., 1]
                 
                 # Element-wise multiplication: F * occ
                 features = F * sampled_conf_broadcast  # [..., output_dim]
             
             # Average both features and confidence along the sample dimension to match density computation
             features = features.mean(dim=-2)
-            
+            sampled_conf = sampled_conf.mean(dim=-2)
+            sampled_grad = sampled_grad.mean(dim=-2)
             
         elif self.config is not None and getattr(self.config, 'use_potential', False):
             # Path for potential field computation (grid encoder)
@@ -1147,9 +1154,10 @@ class MLP(nn.Module):
             raw_density += self.density_noise * torch.randn_like(raw_density)
         if not self.config.use_potential:
             sampled_conf = torch.zeros_like(raw_density)
+            sampled_grad = torch.zeros(raw_density.shape + (3,), device=raw_density.device)
         else:
             sampled_conf = sampled_conf.mean(4).squeeze(-1).squeeze(-1).squeeze(-1)
-        return raw_density, x, means.mean(dim=-2), sampled_conf
+        return raw_density, x, means.mean(dim=-2), sampled_conf, sampled_grad
 
     def forward(self,
                 rand,
@@ -1192,13 +1200,13 @@ class MLP(nn.Module):
                            self.training)
         
         if self.disable_density_normals:
-            raw_density, x, means_contract, sampled_conf = self.predict_density(means, stds, rand=rand, no_warp=no_warp, confidence_field=confidence_field, training_step=training_step, store_g_features=store_g_features)
+            raw_density, x, means_contract, sampled_conf, sampled_grad = self.predict_density(means, stds, rand=rand, no_warp=no_warp, confidence_field=confidence_field, training_step=training_step, store_g_features=store_g_features)
             raw_grad_density = None
             normals = None
         else:
             with torch.enable_grad():
                 means.requires_grad_(True)
-                raw_density, x, means_contract, sampled_conf = self.predict_density(means, stds, rand=rand, no_warp=no_warp, confidence_field=confidence_field, training_step=training_step, store_g_features=store_g_features)
+                raw_density, x, means_contract, sampled_conf, sampled_grad = self.predict_density(means, stds, rand=rand, no_warp=no_warp, confidence_field=confidence_field, training_step=training_step, store_g_features=store_g_features)
                 d_output = torch.ones_like(raw_density, requires_grad=False, device=raw_density.device)
                 raw_grad_density = torch.autograd.grad(
                     outputs=raw_density,
@@ -1227,6 +1235,23 @@ class MLP(nn.Module):
 
         # Apply bias and activation to raw density
         density = F.softplus(raw_density + self.density_bias)
+
+        # For RGB modulation, we need gradients at aggregated sample points (frustum centers)
+        # rather than individual Gaussian sample points within each frustum
+        sampled_grad_agg = None
+        if (self.config is not None and 
+            getattr(self.config, 'use_occupancy_gradient_modulation', False) and 
+            confidence_field is not None):
+            
+            # Compute aggregated sample points: mean of Gaussian sample points per frustum
+            # means shape: (..., num_samples, 3) -> (..., 3)
+            aggregated_points = means.mean(dim=-2)  # Average along sample dimension
+            
+            # Query confidence field at aggregated points
+            points_for_conf = aggregated_points.view(-1, 3)
+            _, sampled_grad_agg = confidence_field.query(points_for_conf)
+            # Reshape back to match original batch dimensions
+            sampled_grad_agg = sampled_grad_agg.view(*aggregated_points.shape[:-1], 3)
 
         roughness = None
         if self.disable_rgb:
@@ -1327,6 +1352,23 @@ class MLP(nn.Module):
             # Apply padding, mapping color to [-rgb_padding, 1+rgb_padding].
             rgb = rgb * (1 + 2 * self.rgb_padding) - self.rgb_padding
 
+            if self.config is not None and getattr(self.config, 'use_occupancy_gradient_modulation', False):
+                # MLP output is reshaped to 3x3 matrix per sample
+                rgb_matrix = rgb.view(rgb.shape[:-1] + (3, 3))  # (..., 3, 3)
+                
+                # Use aggregated gradient if available, otherwise fall back to per-sample gradient
+                if sampled_grad_agg is not None:
+                    grad_to_use = sampled_grad_agg
+                else:
+                    # Fallback: use mean of per-sample gradients if sampled_grad_agg not computed
+                    grad_to_use = sampled_grad.mean(dim=-2) if sampled_grad.dim() > 2 else sampled_grad
+                
+                # Matrix multiplication: -(N,3,3) @ (N,3,1) -> (N,3)
+                # grad_expanded = grad_to_use.unsqueeze(-1)  # (..., 3, 1)
+                
+                # rgb = -self.config.alpha_blend_gradient_subtraction_mult * torch.matmul(rgb_matrix, grad_expanded).squeeze(-1)
+                rgb = self.config.alpha_blend_gradient_subtraction_mult * torch.sum((rgb_matrix*grad_to_use.unsqueeze(-2)),-1)
+                
         output_dict = dict(
             coord=means_contract,
             density=density,
@@ -1341,6 +1383,8 @@ class MLP(nn.Module):
         # Add sampled confidence if it was computed (for confidence distortion loss)
         if sampled_conf is not None:
             output_dict['sampled_confidence'] = sampled_conf.squeeze(-1)  # Remove last dimension
+            if sampled_grad is not None:
+                output_dict['sampled_grad'] = sampled_grad
             
         return output_dict
 
@@ -1364,20 +1408,7 @@ def render_image(model,
                  config,
                  verbose=True,
                  return_weights=False):
-    """Render all the pixels of an image (in test mode).
-
-  Args:
-    render_fn: function, jit-ed render function mapping (rand, batch) -> pytree.
-    accelerator: used for DDP.
-    batch: a `Rays` pytree, the rays to be rendered.
-    rand: if random
-    config: A Config class.
-
-  Returns:
-    rgb: rendered color image.
-    disp: rendered disparity image.
-    acc: rendered accumulated weights per pixel.
-  """
+    """Render all the pixels of an image (in test mode)."""
     model.eval()
 
     # Clear divergence cache for inference

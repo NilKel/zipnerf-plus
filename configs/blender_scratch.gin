@@ -1,22 +1,27 @@
 
 # Base configuration
-Config.comment = 'binsum_blackbg'
+Config.comment = 'binmean163264_blackbg'
 Config.dataset_loader = 'blender'
 
 # POTENTIAL GRID CONFIGURATION AND TRIPLANES
 Config.use_potential = True  # Use tensor potential encoding G · ∇occupancy
 Config.use_triplane = False  # Enable triplane blending with hashgrid
-Config.confidence_grid_resolution = (16, 16, 16)
-# Config.confidence_grid_resolutions = [(16,16,16), (32,32,32), (64,64,64)]
+# Config.confidence_grid_resolution = (16, 16, 16)
+Config.confidence_grid_resolutions = [(16,16,16),(32,32,32), (64,64,64)]
 Config.confidence_combination_method = "sum"
 Config.confidence_reg_mult = 0.0
 Config.use_admm_pruner = False
 Config.admm_sparsity_constraint = 0.04
 
+# RGB modulation with occupancy gradient (experimental)
+Config.use_occupancy_gradient_modulation = False  # Set to True to enable
+Config.rgb_modulation_output_dim = 9  # 3x3 matrix per sample that gets multiplied by occupancy gradient
+Config.alpha_blend_gradient_subtraction_mult = 1.0  # Gradient subtraction term
+
 Config.binary_occupancy = True
 
 # Default data configuration - can be overridden
-Config.data_dir = "/home/nilkel/Projects/data/nerf_synthetic/ficus"
+Config.data_dir = "/home/nilkel/Projects/data/nerf_synthetic/materials"
 
 # Camera and scene settings
 Config.near = 2.0
@@ -32,8 +37,8 @@ Config.eval_quantize_metrics = True
 # No confidence grid loading - train from scratch
 # Config.debug_confidence_grid_path = ''  # Disabled
 Config.freeze_debug_confidence = False  # Unfreeze confidence training
-Config.binary_occupancy = False  # Use smooth sigmoid occupancy
 Config.analytical_gradient = False  # Use analytical gradients for better accuracy
+Config.non_uniform_cells = False  # Disable non-uniform finite differences to avoid padding issues
 
 # Training settings - fast testing
 Config.max_steps = 25000
