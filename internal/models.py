@@ -18,7 +18,6 @@ from tqdm import tqdm
 from gridencoder import GridEncoder, PotentialEncoder
 from internal.tri_mip import TriMipEncoding, PotentialTriMipEncoding
 from internal.field import ConfidenceField
-from posencoder import PositionalEncoder
 try:
     from torch_scatter import segment_coo
 except:
@@ -127,26 +126,12 @@ class Model(nn.Module):
         set_kwargs(self, kwargs)
         self.config = config
 
-        # Initialize confidence field for potential encoders or positional encoders
-        # This is needed because positional encoders require confidence field for occupancy
-        needs_confidence_field = self.config.use_potential
-        
-        # Check if positional encoders will be used (before MLPs are created)
-        # We need to explicitly check gin config state since MLPs aren't created yet
-        try:
-            import gin
-            # Check if NerfMLP or PropMLP are configured to use positional encoders
-            nerf_mlp_config = gin.get_bindings('NerfMLP')
-            prop_mlp_config = gin.get_bindings('PropMLP')
-            uses_positional = (
-                nerf_mlp_config.get('use_positional_encoder', False) or
-                prop_mlp_config.get('use_positional_encoder', False)
-            )
-            needs_confidence_field = needs_confidence_field or uses_positional
-        except:
-            # If gin inspection fails, check if debug_confidence_grid_path is set
-            # as a fallback indicator that confidence field is needed
-            needs_confidence_field = needs_confidence_field or bool(getattr(config, 'debug_confidence_grid_path', None))
+        # Initialize confidence field if needed by potential encoders or sanity3xconf
+        needs_confidence_field = (
+            self.config.use_potential or
+            self.config.sanity3xconf or
+            bool(getattr(config, 'debug_confidence_grid_path', None))
+        )
         
         if needs_confidence_field:
             self.confidence_field = ConfidenceField(
@@ -202,10 +187,8 @@ class Model(nn.Module):
             nn.ReLU()
         )
         
-        # Add divergence MLP for regularization if enabled
-        # Note: divergence regularization is only applicable to grid encoders, not positional encoders
-        if (config.use_divergence_regularization and config.use_potential and 
-            not getattr(self.nerf_mlp, 'use_positional_encoder', False)):
+        # Add divergence MLP for regularization if enabled (only for potential encoders)
+        if (config.use_divergence_regularization and config.use_potential):
             # Input dimension is level_dim * 3 (for x, y, z components)
             div_input_dim = self.nerf_mlp.encoder.level_dim * 3
             self.div_mlp = DivergenceMLP(
@@ -238,7 +221,7 @@ class Model(nn.Module):
     Returns:
       ret: list, [*(rgb, distance, acc)]
     """
-        if self.config.use_potential and not self.config.analytical_gradient:
+        if (self.config.use_potential or self.config.sanity3xconf) and not self.config.analytical_gradient:
             # Only pre-compute gradients for stencil-based approach
             self.confidence_field.compute_gradient()
 
@@ -355,10 +338,10 @@ class Model(nn.Module):
             # Push our Gaussians through one of our two MLPs.
             mlp = (self.get_submodule(
                 f'prop_mlp_{i_level}') if self.distinct_prop else self.prop_mlp) if is_prop else self.nerf_mlp
-            # Pass confidence field to MLPs that need it (potential encoders or positional encoders)
+            # Pass confidence field when needed (potential encoders or sanity3xconf)
             mlp_needs_confidence = (
                 self.config.use_potential or 
-                getattr(mlp, 'use_positional_encoder', False)
+                self.config.sanity3xconf
             )
             ray_results = mlp(
                 rand,
@@ -462,9 +445,6 @@ class Model(nn.Module):
                             ).mean()
                             total_loss += loss
                     ray_results['loss_hash_decay'] = total_loss / 3
-                elif isinstance(mlp.encoder, PositionalEncoder):
-                    # Positional encoders don't have hash embeddings, so no hash decay loss
-                    ray_results['loss_hash_decay'] = torch.tensor(0.0, device=means.device)
                 else:
                     idx = mlp.encoder.idx
                     param = mlp.encoder.embeddings
@@ -707,11 +687,6 @@ class MLP(nn.Module):
     net_width_glo: int = 128  # The width of the second part of MLP.
     net_depth_glo: int = 2  # The width of the second part of MLP.
     use_potential: bool = False # If true, use potential encoder
-    use_positional_encoder: bool = False  # If true, use positional encoder instead of grid encoder
-    pos_enc_num_freqs: int = 10  # Number of frequency bands for positional encoder
-    pos_enc_log_sampling: bool = True  # Use log sampling for positional encoder frequencies
-    feature_mlp_hidden_dim: int = 64  # Hidden dimension for feature MLP
-    feature_mlp_num_layers: int = 2  # Number of layers in feature MLP
 
     def __init__(self, config=None, **kwargs):
         super().__init__()
@@ -736,99 +711,55 @@ class MLP(nn.Module):
 
             self.dir_enc_fn = dir_enc_fn
             dim_dir_enc = self.dir_enc_fn(torch.zeros(1, 3), None).shape[-1]
-        # Choose between grid encoder and positional encoder
-        use_positional_encoder = getattr(self, 'use_positional_encoder', False)
+        # Use grid encoder (original logic), with support for sanity variants
+        self.grid_num_levels = int(
+            np.log(self.grid_disired_resolution / self.grid_base_resolution) / np.log(self.grid_level_interval)) + 1
         
-        if use_positional_encoder:
-            # Use positional encoder
-            use_potential = config is not None and getattr(config, 'use_potential', False)
-            encoding_type = 'P_ENCODER' if use_potential else 'F_ENCODER'
-            
-            self.encoder = PositionalEncoder(
-                encoding_type=encoding_type,
-                num_dims=3,
-                num_freqs=self.pos_enc_num_freqs,
-                log_sampling=self.pos_enc_log_sampling
-            )
-            
-            # Set output dimension for positional encoder
-            if use_potential:
-                # P_ENCODER outputs [..., output_dim_F, 3]
-                self.encoder_output_dim = self.encoder.encoder.output_dim_F
-            else:
-                # F_ENCODER outputs [..., output_dim]
-                self.encoder_output_dim = self.encoder.encoder.output_dim
-        else:
-            # Use grid encoder (original logic)
-            self.grid_num_levels = int(
-                np.log(self.grid_disired_resolution / self.grid_base_resolution) / np.log(self.grid_level_interval)) + 1
-            
-            use_potential = config is not None and getattr(config, 'use_potential', False)
-            Encoder = PotentialEncoder if use_potential else GridEncoder
-            
-            # Prepare encoder arguments
-            encoder_kwargs = {
-                'input_dim': 3,
-                'num_levels': self.grid_num_levels,
-                'level_dim': self.grid_level_dim,
-                'per_level_scale': self.grid_level_interval,  # Add missing per_level_scale parameter
-                'base_resolution': self.grid_base_resolution,
-                'desired_resolution': self.grid_disired_resolution,
-                'log2_hashmap_size': self.grid_log2_hashmap_size,
-                'gridtype': 'hash',
-                'align_corners': False,
-            }
-            
-            # Add sphere initialization parameters if this is a sphere experiment
-            if use_potential and config is not None and getattr(config, 'sphere_experiment', False):
-                encoder_kwargs.update({
-                    'sphere_init': True,
-                    'sphere_radius': getattr(config, 'sphere_radius', 1.0),
-                    'sphere_center': getattr(config, 'sphere_center', [0.0, 0.0, 0.0]),
-                })
-            
-            self.encoder = Encoder(**encoder_kwargs)
-            self.encoder_output_dim = self.encoder.output_dim
+        use_potential = config is not None and getattr(config, 'use_potential', False)
+        Encoder = PotentialEncoder if use_potential else GridEncoder
         
-        # Add feature MLP - required when using positional encoders
-        if use_positional_encoder:
-            layers = []
-            input_dim = self.encoder_output_dim
-            
-            # Hidden layers
-            for i in range(self.feature_mlp_num_layers):
-                layers.append(nn.Linear(input_dim, self.feature_mlp_hidden_dim))
-                layers.append(nn.ReLU())
-                input_dim = self.feature_mlp_hidden_dim
-            
-            # Output layer - convert to grid encoder compatible dimension
-            # This ensures density MLP gets same input dim regardless of encoder type
-            grid_output_dim = self.grid_num_levels * self.grid_level_dim
-            layers.append(nn.Linear(input_dim, grid_output_dim))
-            
-            self.feature_mlp = nn.Sequential(*layers)
-            # Update encoder_output_dim to match grid encoder for downstream compatibility
-            self.encoder_output_dim = grid_output_dim
-        else:
-            self.feature_mlp = None
+        # Allow 3x capacity for sanity variants by tripling the number of levels
+        if (not use_potential) and (not (config is not None and getattr(config, 'use_triplane', False))):
+            if getattr(config, 'sanity3x', False) or getattr(config, 'sanity3xconf', False):
+                self.grid_num_levels = self.grid_num_levels * 3
+        
+        # Prepare encoder arguments
+        encoder_kwargs = {
+            'input_dim': 3,
+            'num_levels': self.grid_num_levels,
+            'level_dim': self.grid_level_dim,
+            'per_level_scale': self.grid_level_interval,  # Add missing per_level_scale parameter
+            'base_resolution': self.grid_base_resolution,
+            'desired_resolution': self.grid_disired_resolution,
+            'log2_hashmap_size': self.grid_log2_hashmap_size,
+            'gridtype': 'hash',
+            'align_corners': False,
+        }
+        
+        # Add sphere initialization parameters if this is a sphere experiment with potential
+        if use_potential and config is not None and getattr(config, 'sphere_experiment', False):
+            encoder_kwargs.update({
+                'sphere_init': True,
+                'sphere_radius': getattr(config, 'sphere_radius', 1.0),
+                'sphere_center': getattr(config, 'sphere_center', [0.0, 0.0, 0.0]),
+            })
+        
+        self.encoder = Encoder(**encoder_kwargs)
+        self.encoder_output_dim = self.encoder.output_dim
+        
+        # No positional-encoder feature MLP
+        self.feature_mlp = None
         
         # Add triplane components
         TriplaneEncoder = PotentialTriMipEncoding if use_potential else TriMipEncoding
         self.tri_mip_encoding = TriplaneEncoder(n_levels=8, plane_size=512, feature_dim=16)
-
+ 
         projection_in_dim = self.tri_mip_encoding.dim_out
         if use_potential:
             # For potential encoders, multiply by 3 for the vector potential dimension
-            if use_positional_encoder:
-                projection_out_dim = self.encoder_output_dim * 3
-            else:
-                projection_out_dim = self.encoder.output_dim * 3
+            projection_out_dim = self.encoder.output_dim * 3
         else:
-            # For standard encoders
-            if use_positional_encoder:
-                projection_out_dim = self.encoder_output_dim
-            else:
-                projection_out_dim = self.encoder.output_dim
+            projection_out_dim = self.encoder.output_dim
 
         self.tri_mip_projection = nn.Sequential(
             nn.Linear(projection_in_dim, projection_out_dim),
@@ -836,7 +767,7 @@ class MLP(nn.Module):
         )
         
         last_dim = self.encoder_output_dim
-        if self.scale_featurization and not use_positional_encoder:
+        if self.scale_featurization:
             last_dim += self.encoder.num_levels
         self.density_layer = nn.Sequential(nn.Linear(last_dim, 64),
                                            nn.ReLU(),
@@ -887,7 +818,7 @@ class MLP(nn.Module):
 
     def predict_density(self, means, stds, rand=False, no_warp=False, confidence_field=None, training_step=None, store_g_features=False):
         """Helper function to output density."""
-        # Initialize sampled_conf to None - will be filled if using potential encoder
+        # Initialize sampled_conf to None - will be filled if using potential encoder or sanity3xconf
         sampled_conf = None
         
         # Encode input positions
@@ -901,66 +832,12 @@ class MLP(nn.Module):
         
         # Check if triplane is enabled using stored config
         use_triplane = self.config is not None and getattr(self.config, 'use_triplane', False)
-        use_positional_encoder = getattr(self, 'use_positional_encoder', False)
         
-        if not use_positional_encoder:
-            # Move grid_sizes to the correct device and calculate weights once.
-            grid_sizes = self.encoder.grid_sizes.to(stds.device)
-            weights = torch.erf(1 / torch.sqrt(8 * stds[..., None] ** 2 * grid_sizes ** 2 + 1e-8))
+        # Move grid_sizes to the correct device and calculate weights once.
+        grid_sizes = self.encoder.grid_sizes.to(stds.device)
+        weights = torch.erf(1 / torch.sqrt(8 * stds[..., None] ** 2 * grid_sizes ** 2 + 1e-8))
 
-        if use_positional_encoder:
-            # Path for positional encoder
-            use_potential = self.config is not None and getattr(self.config, 'use_potential', False)
-            
-            if use_potential:
-                # P_ENCODER case: Get tensor potential and dot product with grad_occ
-                if confidence_field is None:
-                    raise ValueError("Confidence field must be provided when using potential with positional encoder.")
-                
-                # Get tensor potential G of shape [..., output_dim_F, 3]
-                G = self.encoder(means)
-                
-                # Store G_features for divergence regularization if requested
-                if store_g_features:
-                    self._stored_g_features = G.clone()
-                
-                # Get occupancy gradient
-                means_for_conf = means.view(-1, 3)
-                sampled_conf_raw, sampled_grad = confidence_field.query(means_for_conf)
-                
-                sampled_conf = sampled_conf.view(*hash_features_per_level.shape[:-3], 1, 1, 1) # (..., 1, 1, 1)
-                sampled_grad = sampled_grad.view(*hash_features_per_level.shape[:-3], 1, 1, 3) # (..., 1, 1, 3)
-                
-                # Dot product: G · grad_occ
-                dot_product = -torch.sum(G * sampled_grad, dim=-1)  # [..., output_dim_F]
-                features = dot_product
-                
-            else:
-                # F_ENCODER case: Get positional features and multiply with occupancy
-                if confidence_field is None:
-                    raise ValueError("Confidence field must be provided when using positional encoder.")
-                
-                # Get positional features F of shape [..., output_dim]
-                F = self.encoder(means)
-                
-                # Get occupancy (sampled_conf is actually occupancy)
-                means_for_conf = means.view(-1, 3)
-                sampled_conf_raw, _ = confidence_field.query(means_for_conf)
-                
-                # Store the raw confidence values for distortion loss (shaped like means)
-                sampled_conf_unaveraged = sampled_conf_raw.view(*means.shape[:-1], 1)  # (..., num_samples, 1)
-                
-                # Reshape for broadcasting in feature computation
-                sampled_conf_broadcast = sampled_conf_raw.view(*F.shape[:-1], 1)  # [..., 1]
-                
-                # Element-wise multiplication: F * occ
-                features = F * sampled_conf_broadcast  # [..., output_dim]
-            
-            # Average both features and confidence along the sample dimension to match density computation
-            features = features.mean(dim=-2)
-            
-            
-        elif self.config is not None and getattr(self.config, 'use_potential', False):
+        if self.config is not None and getattr(self.config, 'use_potential', False):
             # Path for potential field computation (grid encoder)
             if confidence_field is None:
                 raise ValueError("Confidence field must be provided when using potential.")
@@ -1065,15 +942,26 @@ class MLP(nn.Module):
             features = (blended_features_per_level).mean(dim=-3).flatten(-2, -1).squeeze(-1)
             
         else:
-            # Original hashgrid-only path
-            features = self.encoder(means, bound=1).unflatten(-1, (self.encoder.num_levels, -1))
-            features = (features * weights[..., None]).mean(dim=-3).flatten(-2, -1)
+            # Hashgrid-only path with sanity variants
+            features_raw = self.encoder(means, bound=1).unflatten(-1, (self.encoder.num_levels, -1))
+            if getattr(self.config, 'sanity3xconf', False):
+                # Multiply 3x hashgrid features by sampled sigmoid confidence
+                if confidence_field is None:
+                    raise ValueError("Confidence field must be provided when using sanity3xconf.")
+                means_for_conf = means.view(-1, 3)
+                sampled_conf_raw, _ = confidence_field.query(means_for_conf)
+                # Broadcast confidence across levels and per-level dims: (..., n, 1, 1)
+                sampled_conf_broadcast = sampled_conf_raw.view(*means.shape[:-1], 1).unsqueeze(-1)
+                features_raw = features_raw * sampled_conf_broadcast
+                # Store sampled confidence in (..., n) shape for downstream use
+                sampled_conf = sampled_conf_raw.view(*means.shape[:-1])
+            # For both baseline and sanity3x, aggregate across levels
+            features = (features_raw * weights[..., None]).mean(dim=-3).flatten(-2, -1)
         
         # Apply feature MLP (required for positional encoders)
-        if self.feature_mlp is not None:
-            features = self.feature_mlp(features)
+        # No positional-encoder feature MLP remains
         
-        if self.scale_featurization and not use_positional_encoder:
+        if self.scale_featurization:
             with torch.no_grad():
                 vl2mean = segment_coo((self.encoder.embeddings ** 2).sum(-1),
                                       self.encoder.idx,
@@ -1112,10 +1000,13 @@ class MLP(nn.Module):
         # Add noise to regularize the density predictions if needed.
         if rand and (self.density_noise > 0):
             raw_density += self.density_noise * torch.randn_like(raw_density)
-        if not self.config.use_potential:
-            sampled_conf = torch.zeros_like(raw_density)
-        else:
+        if self.config.use_potential:
             sampled_conf = sampled_conf.mean(4).squeeze(-1).squeeze(-1).squeeze(-1)
+        elif self.config.sanity3xconf:
+            # sampled_conf already has shape (..., n)
+            pass
+        else:
+            sampled_conf = torch.zeros_like(raw_density)
         return raw_density, x, means.mean(dim=-2), sampled_conf
 
     def forward(self,

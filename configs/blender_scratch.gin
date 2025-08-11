@@ -1,16 +1,16 @@
 
 # Base configuration
-Config.comment = '64bincf'
+Config.comment = ''
 Config.dataset_loader = 'blender'
 
 # POTENTIAL GRID CONFIGURATION AND TRIPLANES
-Config.use_potential = True  # Use tensor potential encoding G · ∇occupancy
-Config.use_triplane = True  # Enable triplane blending with hashgrid
+Config.use_potential = False  # Use tensor potential encoding G · ∇occupancy
+Config.use_triplane = False  # Enable triplane blending with hashgrid
 Config.confidence_grid_resolution = (64, 64, 64)
 Config.confidence_reg_mult = 0.0
 Config.use_admm_pruner = False
 Config.admm_sparsity_constraint = 0.04
-
+Config.sanity3x = True
 Config.binary_occupancy = True
 
 # Default data configuration - can be overridden

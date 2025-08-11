@@ -31,6 +31,10 @@ class Config:
     binary_occupancy: bool = False  # If True, use binary occupancy with STE instead of smooth sigmoid
     analytical_gradient: bool = False  # If True, use analytical gradient (autograd) instead of stencil-based finite differences
     
+    # Sanity experiment variants
+    sanity3x: bool = False  # If True (and both potential & triplane are False), triple hashgrid level_dim
+    sanity3xconf: bool = False  # If True (and both potential & triplane are False), triple hashgrid level_dim and multiply by confidence field
+    
     # Debug/sanity check options for confidence field
     debug_confidence_grid_path: Optional[str] = None  # Path to pretrained confidence grid for debugging
     freeze_debug_confidence: bool = False  # If True, freeze the debug confidence grid (no gradients)
@@ -243,17 +247,29 @@ class Config:
             model_suffix = "potential"
         else:
             model_suffix = "baseline"
+            # Annotate sanity variants in suffix for clarity
+            if self.sanity3x:
+                model_suffix += "_sanity3x"
+            if self.sanity3xconf:
+                model_suffix += "_sanity3xconf"
             
         # Generate timestamp
         timestamp = datetime.now().strftime("%m%d_%H%M")
         
-        # Set wandb project for synthetic datasets
-        if 'nerf_synthetic' in self.data_dir:
-            self.wandb_project = "my-nerf-experiments"
-            
+        # Auto-set wandb project name from data_dir
+        # Example:
+        #  - /.../nerf_synthetic/lego    -> zip-plus_synthetic_lego
+        #  - /.../mip_360/bicycle        -> zip-plus_360_bicycle
+        dataset_alias_map = {
+            'nerf_synthetic': 'synthetic',
+            'mip_360': '360',
+        }
+        dataset_key = dataset_alias_map.get(dataset_name, dataset_name)
+        self.wandb_project = f"{dataset_key}_{scene_name}"
+        
         # Auto-generate experiment name if not set or is default
         if self.exp_name == "test":
-            self.exp_name = f"{scene_name}_{model_suffix}"
+            self.exp_name = f"zp_{scene_name}_{model_suffix}"
             
         # Append comment if provided
         if self.comment:

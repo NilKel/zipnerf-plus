@@ -3,7 +3,7 @@ Config.dataset_loader = 'llff'
 Config.near = 0.2
 Config.far = 1e6
 Config.factor = 4
-Config.comment = 'sph_32cf'
+Config.comment = 'sph_32cf_nonuniform_sanity'
 Config.use_potential = True
 Config.use_triplane = False
 Config.binary_occupancy = False
@@ -11,7 +11,7 @@ Config.confidence_grid_resolution = (32, 32, 32)
 Config.confidence_distortion_loss_mult = 0.00
 
 Config.non_spherical_contraction = False
-Config.non_uniform_cells = False
+Config.non_uniform_cells = True
 Config.contraction_aware_gradients = False
 
 Config.batch_size = 8196
